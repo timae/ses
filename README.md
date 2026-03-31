@@ -11,15 +11,17 @@ You start an AI coding session, get distracted or close the terminal, and later 
 ## Install
 
 ```bash
-go install github.com/timae/rel.ai@latest
+go install github.com/timae/rel.ai/cmd/ses@latest
 ```
+
+> Requires `~/go/bin` in your `$PATH`. Add `export PATH="$HOME/go/bin:$PATH"` to your `~/.zshrc` or `~/.bashrc` if not already set.
 
 Or build from source:
 
 ```bash
 git clone https://github.com/timae/rel.ai.git
 cd rel.ai
-go build -o ses .
+go build -o ses ./cmd/ses
 ```
 
 ## Quick Start
