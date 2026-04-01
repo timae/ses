@@ -1,3 +1,5 @@
 /ses
+/ses-menu
+ses-menu.app/
 *.db
 .ses/
