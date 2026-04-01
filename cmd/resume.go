@@ -9,8 +9,11 @@ import (
 	"path/filepath"
 	"syscall"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
+	"github.com/timae/rel.ai/internal/db"
 	"github.com/timae/rel.ai/internal/model"
+	"github.com/timae/rel.ai/internal/picker"
 	"github.com/timae/rel.ai/internal/resume"
 )
 
@@ -21,14 +24,27 @@ var (
 )
 
 var resumeCmd = &cobra.Command{
-	Use:   "resume <id>",
+	Use:   "resume [id]",
 	Short: "Generate a context blob for resuming a session",
-	Long:  "Reads the session transcript and generates markdown suitable for pasting into a new AI session.\n\nUsage:\n  ses resume <id> | pbcopy\n  ses resume <id> --inject     Launch a new CLI session with context\n  ses resume <id> --chain      Include linked sessions in context",
-	Args:  cobra.ExactArgs(1),
+	Long:  "Reads the session transcript and generates markdown suitable for pasting into a new AI session.\nRun without an ID to get an interactive session picker with search.\n\nUsage:\n  ses resume              Interactive picker\n  ses resume <id> | pbcopy\n  ses resume <id> --inject     Launch a new CLI session with context\n  ses resume <id> --chain      Include linked sessions in context",
+	Args:  cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		session, err := store.GetSession(args[0])
-		if err != nil {
-			return err
+		var session *model.Session
+		var err error
+
+		if len(args) == 0 {
+			session, err = pickSession()
+			if err != nil {
+				return err
+			}
+			if session == nil {
+				return nil // cancelled
+			}
+		} else {
+			session, err = store.GetSession(args[0])
+			if err != nil {
+				return err
+			}
 		}
 
 		messages, err := loadTranscript(session)
@@ -264,6 +280,36 @@ func extractText(raw json.RawMessage) string {
 		}
 	}
 	return ""
+}
+
+func pickSession() (*model.Session, error) {
+	sessions, err := store.ListSessions(db.ListFilter{Limit: 50})
+	if err != nil {
+		return nil, err
+	}
+	if len(sessions) == 0 {
+		return nil, fmt.Errorf("no sessions found — run ses scan first")
+	}
+
+	m := picker.New(sessions)
+	p := tea.NewProgram(m, tea.WithAltScreen())
+	result, err := p.Run()
+	if err != nil {
+		return nil, err
+	}
+
+	final := result.(picker.Model)
+	if final.Cancelled() {
+		return nil, nil
+	}
+
+	selected := final.Selected()
+	if selected == nil {
+		return nil, nil
+	}
+
+	// Reload with full details (files, prompts, tags)
+	return store.GetSession(selected.ShortID)
 }
 
 func init() {
