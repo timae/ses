@@ -10,48 +10,44 @@ You start an AI coding session, get distracted or close the terminal, and later 
 
 ## Install
 
+### CLI
+
 ```bash
 go install github.com/timae/rel.ai/cmd/ses@latest
 ```
 
 > Requires `~/go/bin` in your `$PATH`. Add `export PATH="$HOME/go/bin:$PATH"` to your `~/.zshrc` or `~/.bashrc` if not already set.
 
-Or build from source:
+### Menu Bar App (macOS)
+
+```bash
+go install github.com/timae/rel.ai/cmd/ses-menu@latest
+```
+
+> Requires CGo (`CGO_ENABLED=1`) and Xcode Command Line Tools.
+
+Or build both from source:
 
 ```bash
 git clone https://github.com/timae/rel.ai.git
 cd rel.ai
 go build -o ses ./cmd/ses
+CGO_ENABLED=1 go build -o ses-menu ./cmd/ses-menu
 ```
 
 ## Quick Start
 
 ```bash
-# Import all sessions from ~/.claude/ and ~/.codex/
+# 1. Import all sessions from ~/.claude/ and ~/.codex/
 ses scan
 
-# Install the background daemon (recommended — never run scan again)
+# 2. Install the background daemon (recommended — never run scan again)
 ses watch --install
 
-# Browse recent sessions
+# 3. Browse recent sessions
 ses list
 
-# Filter by source, project, date, or tag
-ses list --source claude --project myapp --since 2026-03-01
-
-# View full session details
-ses show a3f2
-
-# Search across all session content
-ses search "authentication bug"
-
-# Tag sessions for later
-ses tag a3f2 "auth,bug,urgent"
-
-# Generate a resume context blob and copy to clipboard
-ses resume a3f2 | pbcopy
-
-# Or launch a new session with context pre-loaded
+# 4. Resume a session directly into Claude Code or Codex
 ses resume a3f2 --inject
 ```
 
@@ -67,6 +63,17 @@ ses resume a3f2 --inject
 | `ses search <query>` | Full-text search (FTS5) across session content |
 | `ses tag <id> <tags>` | Add/remove comma-separated tags (`--remove` to delete) |
 
+```bash
+# Filter by source, project, date, or tag
+ses list --source claude --project myapp --since 2026-03-01
+
+# Search across all session content
+ses search "authentication bug"
+
+# Tag sessions for later
+ses tag a3f2 "auth,bug,urgent"
+```
+
 ### Resume & Inject
 
 | Command | Description |
@@ -77,8 +84,19 @@ ses resume a3f2 --inject
 | `ses resume <id> --target codex` | Override which CLI to launch (default: matches session source) |
 
 The `--inject` flag writes the context to a temp file and launches the appropriate CLI:
-- **Claude Code**: `claude --append-system-prompt-file <context> --cd <project>`
+- **Claude Code**: Changes to the project directory, then runs `claude --append-system-prompt-file <context>`
 - **Codex CLI**: `codex --cd <project> <context>`
+
+```bash
+# Print resume context to stdout (pipe or copy manually)
+ses resume a3f2 | pbcopy
+
+# Launch directly into a new CLI session with context
+ses resume a3f2 --inject
+
+# Include context from linked sessions
+ses resume a3f2 --chain --inject
+```
 
 ### Watch (Background Daemon)
 
@@ -94,7 +112,7 @@ The daemon monitors `~/.claude/projects/` and `~/.codex/sessions/` for new or mo
 ```bash
 $ ses watch --install
 Daemon installed and started.
-  Binary:  /usr/local/bin/ses
+  Binary:  ~/go/bin/ses
   Plist:   ~/Library/LaunchAgents/ai.rel.ses.watch.plist
   Log:     ~/.ses/watch.log
 
@@ -105,6 +123,28 @@ $ ses watch --status
 Daemon is running.
   PID = 41418
   Log: ~/.ses/watch.log (09:52)
+```
+
+### Menu Bar App (macOS)
+
+A companion menu bar app that puts a robot (🤖) in your status bar.
+
+| Command | Description |
+|---|---|
+| `ses menu` | Launch the menu bar app |
+| `ses menu --install` | Install as a macOS LaunchAgent (starts on login) |
+| `ses menu --uninstall` | Remove the LaunchAgent |
+
+**What the robot shows:**
+- Daemon status (running/stopped)
+- Last 5 sessions — click to copy `ses resume <id> --inject` to clipboard
+- Quick stats (total sessions, this week)
+- Scan Now / Restart Daemon actions
+
+```bash
+# Install both the daemon and menu bar app
+ses watch --install
+ses menu --install
 ```
 
 ### Stats (Analytics Dashboard)
@@ -175,8 +215,8 @@ ses diff a3f2 --files-only
 
 ```
 $ ses diff a3f2 --stat
- src/auth/middleware.ts     | 45 ++++++++---
- src/auth/tokens.ts        | 23 +++--
+ src/auth/middleware.ts       | 45 ++++++++---
+ src/auth/tokens.ts          | 23 +++--
  src/auth/tests/auth.test.ts | 67 ++++++++++++++
  3 files changed, 112 insertions(+), 23 deletions(-)
 ```
@@ -278,6 +318,7 @@ Review the files listed above for current state.
 - **Incremental scan**: Only re-parses changed files (by mtime + size)
 - **Full rescan**: `ses scan --full` rebuilds the entire index
 - **Daemon log**: `~/.ses/watch.log` when running as a LaunchAgent
+- **Menu log**: `~/.ses/menu.log` when running as a LaunchAgent
 
 The database is a disposable cache — delete it and `ses scan` rebuilds everything from source files.
 
@@ -285,8 +326,9 @@ The database is a disposable cache — delete it and `ses scan` rebuilds everyth
 
 ```
 ses/
-  cmd/ses/main.go       # Entry point
-  cmd/                  # Cobra CLI commands
+  cmd/
+    ses/main.go         # CLI entry point
+    ses-menu/main.go    # Menu bar app entry point
     scan.go             # Import sessions
     list.go             # Browse with filters
     show.go             # Session details
@@ -297,12 +339,14 @@ ses/
     stats.go            # Analytics dashboard
     diff.go             # Git diff integration
     link.go             # Session chaining
+    menu.go             # Menu bar launcher + LaunchAgent
   internal/
     db/                 # SQLite + FTS5 schema, queries, stats, links
     scanner/            # Claude Code + Codex CLI parsers
     model/              # Unified session data types
     resume/             # Context blob generator (full + brief for chains)
     display/            # Terminal formatting + stats dashboard
+    tray/               # Menu bar app (macOS, robot icon)
     gitutil/            # Git diff/log utilities
 ```
 
@@ -311,6 +355,7 @@ Built with:
 - [modernc.org/sqlite](https://modernc.org/sqlite) — Pure Go SQLite (no CGo)
 - [fatih/color](https://github.com/fatih/color) — Terminal colors
 - [fsnotify](https://github.com/fsnotify/fsnotify) — File system watcher
+- [menuet](https://github.com/caseymrm/menuet) — macOS menu bar (CGo)
 
 ## License
 
