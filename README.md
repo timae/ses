@@ -30,6 +30,9 @@ go build -o ses ./cmd/ses
 # Import all sessions from ~/.claude/ and ~/.codex/
 ses scan
 
+# Install the background daemon (recommended — never run scan again)
+ses watch --install
+
 # Browse recent sessions
 ses list
 
@@ -47,31 +50,14 @@ ses tag a3f2 "auth,bug,urgent"
 
 # Generate a resume context blob and copy to clipboard
 ses resume a3f2 | pbcopy
-```
 
-Then paste the resume output into a new Claude Code or Codex session — the AI immediately understands your prior context.
-
-Or skip the clipboard entirely:
-
-```bash
-# Launch a new Claude session with context pre-loaded
+# Or launch a new session with context pre-loaded
 ses resume a3f2 --inject
-
-# Watch for new sessions in real-time
-ses watch
-
-# See your AI coding analytics
-ses stats
-
-# Show what code changed during a session
-ses diff a3f2 --stat
-
-# Chain related sessions together
-ses link a3f2 b5c6 --reason "same feature"
-ses resume a3f2 --chain    # includes linked session context
 ```
 
 ## Commands
+
+### Core
 
 | Command | Description |
 |---|---|
@@ -80,13 +66,156 @@ ses resume a3f2 --chain    # includes linked session context
 | `ses show <id>` | Display session details: metadata, conversation summary, files touched, linked sessions |
 | `ses search <query>` | Full-text search (FTS5) across session content |
 | `ses tag <id> <tags>` | Add/remove comma-separated tags (`--remove` to delete) |
+
+### Resume & Inject
+
+| Command | Description |
+|---|---|
 | `ses resume <id>` | Generate markdown context blob for resuming a session |
 | `ses resume <id> --inject` | Launch a new Claude/Codex session pre-loaded with context |
 | `ses resume <id> --chain` | Include all linked sessions in the resume context |
-| `ses watch` | Auto-scan daemon — watches for new sessions and indexes them in real-time |
-| `ses stats` | Analytics dashboard — session counts, durations, models, projects, activity heatmap |
-| `ses diff <id>` | Show the git diff produced during a session's time window |
-| `ses link <id1> <id2>` | Chain related sessions together (with optional `--reason`) |
+| `ses resume <id> --target codex` | Override which CLI to launch (default: matches session source) |
+
+The `--inject` flag writes the context to a temp file and launches the appropriate CLI:
+- **Claude Code**: `claude --append-system-prompt-file <context> --cd <project>`
+- **Codex CLI**: `codex --cd <project> <context>`
+
+### Watch (Background Daemon)
+
+| Command | Description |
+|---|---|
+| `ses watch` | Watch for new sessions in the foreground |
+| `ses watch --install` | Install as a macOS LaunchAgent (starts on login, auto-restarts) |
+| `ses watch --uninstall` | Remove the LaunchAgent |
+| `ses watch --status` | Check if the daemon is running |
+
+The daemon monitors `~/.claude/projects/` and `~/.codex/sessions/` for new or modified transcript files. When a session ends (or while it's in progress), the index is updated automatically. No more manual `ses scan`.
+
+```bash
+$ ses watch --install
+Daemon installed and started.
+  Binary:  /usr/local/bin/ses
+  Plist:   ~/Library/LaunchAgents/ai.rel.ses.watch.plist
+  Log:     ~/.ses/watch.log
+
+Sessions will be indexed automatically from now on.
+The daemon starts on login and restarts if it crashes.
+
+$ ses watch --status
+Daemon is running.
+  PID = 41418
+  Log: ~/.ses/watch.log (09:52)
+```
+
+### Stats (Analytics Dashboard)
+
+```bash
+ses stats [--since DATE] [--until DATE] [--project PATH] [--source claude|codex]
+```
+
+```
+╔══════════════════════════════════════════╗
+║            SESSION STATISTICS            ║
+╠══════════════════════════════════════════╣
+║ Total sessions                       142 ║
+║ This week                             18 ║
+║ Avg duration                     1h 34m ║
+║ Avg messages/session                  36 ║
+║ Total tool calls                   4,291 ║
+╠══════════════════════════════════════════╣
+║                BY SOURCE                 ║
+║                                          ║
+║   claude                       98  (69%) ║
+║   codex                        44  (31%) ║
+╠══════════════════════════════════════════╣
+║                 BY MODEL                 ║
+║                                          ║
+║   claude-opus-4-6                     52 ║
+║   claude-sonnet-4-6                   46 ║
+║   openai                              44 ║
+╠══════════════════════════════════════════╣
+║               TOP PROJECTS               ║
+║                                          ║
+║   ~/projects/webapp                   38 ║
+║   ~/projects/api-server               27 ║
+║   ~/projects/mobile-app               19 ║
+║   ~/projects/infra                    14 ║
+║   ~/projects/docs                      9 ║
+╠══════════════════════════════════════════╣
+║          ACTIVITY (last 7 days)          ║
+║                                          ║
+║  Mon 03/24  ████████████  6              ║
+║  Tue 03/25  ██████░░░░░░  3              ║
+║  Wed 03/26  ████████████  6              ║
+║  Thu 03/27  ████░░░░░░░░  2              ║
+║  Fri 03/28  ░░░░░░░░░░░░  0              ║
+║  Sat 03/29  ██░░░░░░░░░░  1              ║
+║ *Sun 03/30  ░░░░░░░░░░░░  0              ║
+╠══════════════════════════════════════════╣
+║               TOP TAGS                   ║
+║                                          ║
+║  #bug (12)  #refactor (8)  #deploy (5)   ║
+╚══════════════════════════════════════════╝
+```
+
+### Diff (Git Changes)
+
+Show the code changes made during a session by finding commits within the session's time window.
+
+```bash
+# Full diff
+ses diff a3f2
+
+# File-level summary
+ses diff a3f2 --stat
+
+# Just file names
+ses diff a3f2 --files-only
+```
+
+```
+$ ses diff a3f2 --stat
+ src/auth/middleware.ts     | 45 ++++++++---
+ src/auth/tokens.ts        | 23 +++--
+ src/auth/tests/auth.test.ts | 67 ++++++++++++++
+ 3 files changed, 112 insertions(+), 23 deletions(-)
+```
+
+If the session recorded a starting git commit (Codex sessions do this), the diff shows changes from that commit to HEAD. Otherwise, it finds all commits within the session's start/end time range.
+
+### Link (Chain Sessions)
+
+Chain related sessions that are part of the same task across multiple sittings.
+
+```bash
+# Link two sessions
+ses link a3f2 b5c6 --reason "continuing auth fix"
+
+# View the chain
+ses link a3f2 --list
+Sessions linked to a3f2:
+  → b5c6d7e8 claude — Run the full test suite (continuing auth fix)
+  ← 1a2b3c4d codex  — Initial investigation (same bug)
+
+# Resume with full chain context
+ses resume a3f2 --chain
+```
+
+The `--chain` flag on resume generates a combined context blob that includes summaries from all linked sessions in chronological order, giving the AI the full history of your multi-session task.
+
+Linked sessions also appear in `ses show`:
+
+```
+$ ses show a3f2
+Session a3f2b5c6
+────────────────────────────────────────────────────────────
+  Source:        claude (claude-opus-4-6)
+  ...
+
+Linked Sessions
+  → b5c6d7e8 claude — Run the full test suite (continuing auth fix)
+  ← 1a2b3c4d codex  — Initial investigation (same bug)
+```
 
 ## What It Captures
 
@@ -111,7 +240,7 @@ The `ses resume` command generates structured markdown like this:
 # Session Resume: Fix authentication bug in login flow
 
 ## Context
-- **Project**: /Users/you/myapp
+- **Project**: /home/user/myapp
 - **Git branch**: feature/auth-fix (at a1b2c3d4)
 - **When**: 2026-03-20T13:22:16Z (2h15m)
 - **Source**: claude (claude-opus-4-6)
@@ -148,6 +277,7 @@ Review the files listed above for current state.
 - **Transcripts**: Referenced from original locations, not copied
 - **Incremental scan**: Only re-parses changed files (by mtime + size)
 - **Full rescan**: `ses scan --full` rebuilds the entire index
+- **Daemon log**: `~/.ses/watch.log` when running as a LaunchAgent
 
 The database is a disposable cache — delete it and `ses scan` rebuilds everything from source files.
 
@@ -156,7 +286,17 @@ The database is a disposable cache — delete it and `ses scan` rebuilds everyth
 ```
 ses/
   cmd/ses/main.go       # Entry point
-  cmd/                  # Cobra CLI commands (scan, list, show, search, tag, resume, watch, stats, diff, link)
+  cmd/                  # Cobra CLI commands
+    scan.go             # Import sessions
+    list.go             # Browse with filters
+    show.go             # Session details
+    search.go           # Full-text search
+    tag.go              # Session tagging
+    resume.go           # Context generation + inject + chain
+    watch.go            # File watcher + daemon management
+    stats.go            # Analytics dashboard
+    diff.go             # Git diff integration
+    link.go             # Session chaining
   internal/
     db/                 # SQLite + FTS5 schema, queries, stats, links
     scanner/            # Claude Code + Codex CLI parsers
