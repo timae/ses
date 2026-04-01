@@ -90,14 +90,14 @@ func menuItems() []menuet.MenuItem {
 	items = append(items, menuet.MenuItem{
 		Text: "Scan Now",
 		Clicked: func() {
-			exec.Command("ses", "scan").Run()
+			exec.Command(sesBin(), "scan").Run()
 		},
 	})
 	items = append(items, menuet.MenuItem{
 		Text: "Restart Daemon",
 		Clicked: func() {
-			exec.Command("ses", "watch", "--uninstall").Run()
-			exec.Command("ses", "watch", "--install").Run()
+			exec.Command(sesBin(), "watch", "--uninstall").Run()
+			exec.Command(sesBin(), "watch", "--install").Run()
 		},
 	})
 
@@ -116,18 +116,46 @@ func isDaemonRunning() bool {
 	return err == nil
 }
 
+func sesBin() string {
+	// The menu app lives next to ses in the same directory
+	exe, _ := os.Executable()
+	candidate := filepath.Join(filepath.Dir(exe), "ses")
+	if _, err := os.Stat(candidate); err == nil {
+		return candidate
+	}
+	// Try common Go install paths
+	home, _ := os.UserHomeDir()
+	candidate = filepath.Join(home, "go", "bin", "ses")
+	if _, err := os.Stat(candidate); err == nil {
+		return candidate
+	}
+	// Fallback to PATH
+	if p, err := exec.LookPath("ses"); err == nil {
+		return p
+	}
+	return "ses"
+}
+
 func copyResume(shortID string) {
-	out, err := exec.Command("ses", "resume", shortID).Output()
+	bin := sesBin()
+	out, err := exec.Command(bin, "resume", shortID).Output()
 	if err != nil {
 		menuet.App().Notification(menuet.Notification{
 			Title:   "Resume failed",
-			Message: fmt.Sprintf("Could not generate resume for %s", shortID),
+			Message: fmt.Sprintf("Could not generate resume for %s: %v", shortID, err),
 		})
 		return
 	}
+
 	cmd := exec.Command("pbcopy")
 	cmd.Stdin = strings.NewReader(string(out))
-	cmd.Run()
+	if err := cmd.Run(); err != nil {
+		menuet.App().Notification(menuet.Notification{
+			Title:   "Clipboard failed",
+			Message: fmt.Sprintf("pbcopy error: %v", err),
+		})
+		return
+	}
 
 	menuet.App().Notification(menuet.Notification{
 		Title:   "Resume copied to clipboard",
