@@ -137,28 +137,14 @@ func sesBin() string {
 }
 
 func copyResume(shortID string) {
-	bin := sesBin()
-	out, err := exec.Command(bin, "resume", shortID).Output()
-	if err != nil {
-		menuet.App().Notification(menuet.Notification{
-			Title:   "Resume failed",
-			Message: fmt.Sprintf("Could not generate resume for %s: %v", shortID, err),
-		})
-		return
-	}
+	command := fmt.Sprintf("ses resume %s", shortID)
 
 	cmd := exec.Command("pbcopy")
-	cmd.Stdin = strings.NewReader(string(out))
-	if err := cmd.Run(); err != nil {
-		menuet.App().Notification(menuet.Notification{
-			Title:   "Clipboard failed",
-			Message: fmt.Sprintf("pbcopy error: %v", err),
-		})
-		return
-	}
+	cmd.Stdin = strings.NewReader(command)
+	cmd.Run()
 
 	menuet.App().Notification(menuet.Notification{
-		Title:   "Resume copied to clipboard",
-		Message: fmt.Sprintf("Session %s — paste into a new Claude/Codex session", shortID),
+		Title:   "Copied to clipboard",
+		Message: command,
 	})
 }
