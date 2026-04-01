@@ -125,12 +125,14 @@ func launchClaude(session *model.Session, contextFile string) error {
 		return fmt.Errorf("claude not found in PATH — install Claude Code first")
 	}
 
+	// Claude Code uses cwd, not a --cd flag
+	if session.Project != "" {
+		os.Chdir(session.Project)
+	}
+
 	args := []string{
 		"claude",
 		"--append-system-prompt-file", contextFile,
-	}
-	if session.Project != "" {
-		args = append(args, "--cd", session.Project)
 	}
 
 	fmt.Printf("Launching Claude Code in %s with session context...\n", filepath.Base(session.Project))
