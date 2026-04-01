@@ -51,16 +51,42 @@ ses resume a3f2 | pbcopy
 
 Then paste the resume output into a new Claude Code or Codex session — the AI immediately understands your prior context.
 
+Or skip the clipboard entirely:
+
+```bash
+# Launch a new Claude session with context pre-loaded
+ses resume a3f2 --inject
+
+# Watch for new sessions in real-time
+ses watch
+
+# See your AI coding analytics
+ses stats
+
+# Show what code changed during a session
+ses diff a3f2 --stat
+
+# Chain related sessions together
+ses link a3f2 b5c6 --reason "same feature"
+ses resume a3f2 --chain    # includes linked session context
+```
+
 ## Commands
 
 | Command | Description |
 |---|---|
 | `ses scan [--full]` | Import sessions from `~/.claude/` and `~/.codex/` into a local SQLite index |
 | `ses list [flags]` | Browse sessions with filters (`--since`, `--until`, `--project`, `--source`, `--tag`, `--limit`) |
-| `ses show <id>` | Display session details: metadata, conversation summary, files touched |
+| `ses show <id>` | Display session details: metadata, conversation summary, files touched, linked sessions |
 | `ses search <query>` | Full-text search (FTS5) across session content |
 | `ses tag <id> <tags>` | Add/remove comma-separated tags (`--remove` to delete) |
 | `ses resume <id>` | Generate markdown context blob for resuming a session |
+| `ses resume <id> --inject` | Launch a new Claude/Codex session pre-loaded with context |
+| `ses resume <id> --chain` | Include all linked sessions in the resume context |
+| `ses watch` | Auto-scan daemon — watches for new sessions and indexes them in real-time |
+| `ses stats` | Analytics dashboard — session counts, durations, models, projects, activity heatmap |
+| `ses diff <id>` | Show the git diff produced during a session's time window |
+| `ses link <id1> <id2>` | Chain related sessions together (with optional `--reason`) |
 
 ## What It Captures
 
@@ -129,20 +155,22 @@ The database is a disposable cache — delete it and `ses scan` rebuilds everyth
 
 ```
 ses/
-  main.go
-  cmd/                  # Cobra CLI commands
+  cmd/ses/main.go       # Entry point
+  cmd/                  # Cobra CLI commands (scan, list, show, search, tag, resume, watch, stats, diff, link)
   internal/
-    db/                 # SQLite + FTS5 schema and queries
+    db/                 # SQLite + FTS5 schema, queries, stats, links
     scanner/            # Claude Code + Codex CLI parsers
     model/              # Unified session data types
-    resume/             # Context blob generator
-    display/            # Terminal formatting
+    resume/             # Context blob generator (full + brief for chains)
+    display/            # Terminal formatting + stats dashboard
+    gitutil/            # Git diff/log utilities
 ```
 
 Built with:
 - [cobra](https://github.com/spf13/cobra) — CLI framework
 - [modernc.org/sqlite](https://modernc.org/sqlite) — Pure Go SQLite (no CGo)
 - [fatih/color](https://github.com/fatih/color) — Terminal colors
+- [fsnotify](https://github.com/fsnotify/fsnotify) — File system watcher
 
 ## License
 

@@ -89,7 +89,7 @@ func (s *CodexScanner) Discover() ([]SessionFile, error) {
 	for _, tp := range transcripts {
 		base := filepath.Base(tp)
 		// rollout-{timestamp}-{sessionId}.jsonl
-		sessionID := extractCodexSessionID(base)
+		sessionID := ExtractCodexSessionID(base)
 		if sessionID == "" {
 			continue
 		}
@@ -239,7 +239,7 @@ func (s *CodexScanner) Parse(sf SessionFile) (*model.Session, []model.Message, e
 	return session, messages, nil
 }
 
-func extractCodexSessionID(filename string) string {
+func ExtractCodexSessionID(filename string) string {
 	// rollout-2026-03-21T14:50:05.240Z-019d10df-c30d-7f41-8c2e-fb61ecc0271d.jsonl
 	name := strings.TrimSuffix(filename, ".jsonl")
 	if !strings.HasPrefix(name, "rollout-") {

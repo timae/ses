@@ -129,6 +129,38 @@ func extractAccomplishments(messages []model.Message) []string {
 	return candidates
 }
 
+// GenerateBrief produces a shorter summary for linked session chains.
+func GenerateBrief(session *model.Session, messages []model.Message) string {
+	var b strings.Builder
+
+	title := session.FirstPrompt
+	if len(title) > 80 {
+		title = title[:77] + "..."
+	}
+	fmt.Fprintf(&b, "## Previous Session: %s\n\n", title)
+	fmt.Fprintf(&b, "- **Project**: %s | **Branch**: %s\n", session.Project, session.GitBranch)
+	started := session.StartedAt.Format(time.RFC3339)
+	if !session.EndedAt.IsZero() {
+		duration := session.EndedAt.Sub(session.StartedAt).Round(time.Second)
+		fmt.Fprintf(&b, "- **When**: %s (%s)\n", started, duration)
+	}
+	fmt.Fprintf(&b, "- **Messages**: %d, **Tool calls**: %d\n\n", session.MessageCount, session.ToolCallCount)
+
+	fmt.Fprintf(&b, "**Goal**: %s\n\n", session.FirstPrompt)
+
+	accomplishments := extractAccomplishments(messages)
+	if len(accomplishments) > 0 {
+		b.WriteString("**Outcome**: ")
+		last := accomplishments[len(accomplishments)-1]
+		if len(last) > 300 {
+			last = last[:297] + "..."
+		}
+		fmt.Fprintf(&b, "%s\n", last)
+	}
+
+	return b.String()
+}
+
 func isSystemNoise(p string) bool {
 	prefixes := []string{
 		"<local-command",

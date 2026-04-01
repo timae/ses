@@ -56,7 +56,17 @@ CREATE VIRTUAL TABLE IF NOT EXISTS session_fts USING fts5(
     content_rowid=id
 );
 
+CREATE TABLE IF NOT EXISTS session_links (
+    from_id    INTEGER REFERENCES sessions(id) ON DELETE CASCADE,
+    to_id      INTEGER REFERENCES sessions(id) ON DELETE CASCADE,
+    reason     TEXT DEFAULT '',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (from_id, to_id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_sessions_started ON sessions(started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project);
 CREATE INDEX IF NOT EXISTS idx_sessions_source  ON sessions(source_type);
+CREATE INDEX IF NOT EXISTS idx_session_links_from ON session_links(from_id);
+CREATE INDEX IF NOT EXISTS idx_session_links_to   ON session_links(to_id);
 `
