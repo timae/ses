@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/caseymrm/menuet"
@@ -64,7 +65,7 @@ func menuItems() []menuet.MenuItem {
 			items = append(items, menuet.MenuItem{
 				Text: fmt.Sprintf("%s  %s  %s", id, when, prompt),
 				Clicked: func() {
-					openResumeSession(capturedID)
+					copyResumeCommand(capturedID)
 				},
 			})
 		}
@@ -135,21 +136,15 @@ func sesBin() string {
 	return "ses"
 }
 
-func openResumeSession(shortID string) {
-	bin := sesBin()
+func copyResumeCommand(shortID string) {
+	command := fmt.Sprintf("ses resume %s --inject", shortID)
 
-	// Open a new Terminal window running ses resume --inject
-	script := fmt.Sprintf(`tell application "Terminal"
-	activate
-	do script "%s resume %s --inject"
-end tell`, bin, shortID)
+	cmd := exec.Command("pbcopy")
+	cmd.Stdin = strings.NewReader(command)
+	cmd.Run()
 
-	cmd := exec.Command("osascript", "-e", script)
-	if err := cmd.Run(); err != nil {
-		menuet.App().Notification(menuet.Notification{
-			Title:   "Launch failed",
-			Message: fmt.Sprintf("Could not open terminal: %v", err),
-		})
-		return
-	}
+	menuet.App().Notification(menuet.Notification{
+		Title:   "Copied to clipboard",
+		Message: command,
+	})
 }
