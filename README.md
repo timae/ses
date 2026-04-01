@@ -257,6 +257,64 @@ Linked Sessions
   ← 1a2b3c4d codex  — Initial investigation (same bug)
 ```
 
+## Running in Containers / Sandboxed Environments
+
+`ses` reads session data from `~/.claude/` and `~/.codex/` on the local filesystem. If you run Claude Code or Codex inside a container, DevContainer, or remote VM, you need to make the session data accessible.
+
+### Option 1: Volume mount (recommended)
+
+Mount the container's session directories to persistent storage on the host:
+
+```bash
+docker run \
+  -v ~/.claude:/root/.claude \
+  -v ~/.codex:/root/.codex \
+  your-image
+```
+
+For Docker Compose:
+
+```yaml
+volumes:
+  - ~/.claude:/root/.claude
+  - ~/.codex:/root/.codex
+```
+
+Then run `ses` on the host as normal — the daemon picks up sessions automatically.
+
+### Option 2: Install ses inside the container
+
+Add `ses` to your container image:
+
+```dockerfile
+RUN go install github.com/timae/rel.ai/cmd/ses@latest
+```
+
+Run `ses scan` and `ses list` inside the container. Note that the background daemon and menu bar app are host-only features.
+
+### Option 3: Copy session data out
+
+If you can't mount volumes, copy the session directories after your work:
+
+```bash
+docker cp <container>:/root/.claude/ ~/.claude/
+docker cp <container>:/root/.codex/ ~/.codex/
+ses scan
+```
+
+### DevContainers / GitHub Codespaces
+
+Add the volume mount to your `.devcontainer/devcontainer.json`:
+
+```json
+{
+  "mounts": [
+    "source=${localEnv:HOME}/.claude,target=/root/.claude,type=bind",
+    "source=${localEnv:HOME}/.codex,target=/root/.codex,type=bind"
+  ]
+}
+```
+
 ## What It Captures
 
 From **Claude Code** (`~/.claude/`):
