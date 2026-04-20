@@ -1,5 +1,6 @@
 /ses
 /ses-menu
+/share-server
 ses-menu.app/
 *.db
 .ses/

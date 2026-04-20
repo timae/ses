@@ -1,0 +1,238 @@
+// Package shareserver hosts expiring session-share links.
+//
+// The server is intentionally small: one bearer-auth'd upload endpoint, two
+// public render endpoints, one revoke endpoint, and a background sweeper.
+// Storage is abstracted so a filesystem-backed store runs locally today and
+// an object-store-backed one can slot in later without touching handlers.
+package shareserver
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/base64"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
+)
+
+var (
+	ErrNotFound = errors.New("share not found")
+	ErrExpired  = errors.New("share expired")
+)
+
+// Share is the payload uploaded by the CLI and rendered by the server.
+//
+// Keeping this flat and self-contained (no dependency on internal/model)
+// means the upload/download wire format can evolve independently of how the
+// CLI represents sessions today.
+type Share struct {
+	ID        string    `json:"id"`
+	Name      string    `json:"name,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	ExpiresAt time.Time `json:"expires_at"`
+
+	Session  ShareSession `json:"session"`
+	Messages []ShareMsg   `json:"messages"`
+}
+
+type ShareSession struct {
+	ShortID      string    `json:"short_id"`
+	Project      string    `json:"project"`
+	Source       string    `json:"source"`
+	Model        string    `json:"model,omitempty"`
+	GitBranch    string    `json:"git_branch,omitempty"`
+	StartedAt    time.Time `json:"started_at"`
+	EndedAt      time.Time `json:"ended_at,omitempty"`
+	MessageCount int       `json:"message_count"`
+	ToolCalls    int       `json:"tool_calls"`
+	FirstPrompt  string    `json:"first_prompt,omitempty"`
+}
+
+type ShareMsg struct {
+	Role     string `json:"role"`
+	Content  string `json:"content"`
+	ToolName string `json:"tool_name,omitempty"`
+	FilePath string `json:"file_path,omitempty"`
+}
+
+// Store persists Share payloads with an expiry. Implementations must be safe
+// for concurrent use.
+type Store interface {
+	// Put writes a gzipped payload keyed by id. Overwrites any existing entry.
+	Put(ctx context.Context, id string, expiresAt time.Time, gzipped []byte) error
+	// Get returns the gzipped payload and its expiry. Returns ErrExpired if
+	// the stored expiry is in the past; callers should treat expired entries
+	// as not found and may delete them.
+	Get(ctx context.Context, id string) (gzipped []byte, expiresAt time.Time, err error)
+	// Delete removes an entry. No-ops silently if the id is unknown.
+	Delete(ctx context.Context, id string) error
+	// ListExpired returns ids whose expiry is at or before now.
+	ListExpired(ctx context.Context, now time.Time) ([]string, error)
+}
+
+// NewID returns a URL-safe unguessable share id (128 bits of entropy).
+func NewID() (string, error) {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(b[:]), nil
+}
+
+// --- filesystem store -----------------------------------------------------
+//
+// Layout: {root}/{id}_{expires_unix}.json.gz
+//
+// Encoding the expiry in the filename lets the sweeper list directory entries
+// and decide what to delete without opening any files. Collisions are
+// impossible (ids are 128-bit random).
+
+const fsSuffix = ".json.gz"
+
+type FSStore struct {
+	root string
+}
+
+func NewFSStore(root string) (*FSStore, error) {
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		return nil, fmt.Errorf("creating share root %q: %w", root, err)
+	}
+	return &FSStore{root: root}, nil
+}
+
+func (s *FSStore) Put(_ context.Context, id string, expiresAt time.Time, gzipped []byte) error {
+	if err := validateID(id); err != nil {
+		return err
+	}
+	// Drop any pre-existing entry for this id so an overwrite never leaves
+	// two files with different expiries around.
+	if existing, _ := s.find(id); existing != "" {
+		_ = os.Remove(existing)
+	}
+	path := filepath.Join(s.root, fmt.Sprintf("%s_%d%s", id, expiresAt.Unix(), fsSuffix))
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, gzipped, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+func (s *FSStore) Get(_ context.Context, id string) ([]byte, time.Time, error) {
+	if err := validateID(id); err != nil {
+		return nil, time.Time{}, err
+	}
+	path, exp := s.find(id)
+	if path == "" {
+		return nil, time.Time{}, ErrNotFound
+	}
+	if time.Now().After(exp) {
+		return nil, exp, ErrExpired
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, time.Time{}, ErrNotFound
+		}
+		return nil, time.Time{}, err
+	}
+	return data, exp, nil
+}
+
+func (s *FSStore) Delete(_ context.Context, id string) error {
+	if err := validateID(id); err != nil {
+		return err
+	}
+	path, _ := s.find(id)
+	if path == "" {
+		return nil
+	}
+	err := os.Remove(path)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
+}
+
+func (s *FSStore) ListExpired(_ context.Context, now time.Time) ([]string, error) {
+	entries, err := os.ReadDir(s.root)
+	if err != nil {
+		return nil, err
+	}
+	var expired []string
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		id, exp, ok := parseName(e.Name())
+		if !ok {
+			continue
+		}
+		if !now.Before(exp) {
+			expired = append(expired, id)
+		}
+	}
+	return expired, nil
+}
+
+// find returns the on-disk path and expiry for id, or ("", zero) if missing.
+func (s *FSStore) find(id string) (string, time.Time) {
+	entries, err := os.ReadDir(s.root)
+	if err != nil {
+		return "", time.Time{}
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		gotID, exp, ok := parseName(e.Name())
+		if !ok || gotID != id {
+			continue
+		}
+		return filepath.Join(s.root, e.Name()), exp
+	}
+	return "", time.Time{}
+}
+
+// parseName decodes "{id}_{unix}.json.gz" into (id, expiresAt, true).
+func parseName(name string) (string, time.Time, bool) {
+	if !strings.HasSuffix(name, fsSuffix) {
+		return "", time.Time{}, false
+	}
+	base := strings.TrimSuffix(name, fsSuffix)
+	sep := strings.LastIndex(base, "_")
+	if sep <= 0 || sep == len(base)-1 {
+		return "", time.Time{}, false
+	}
+	id := base[:sep]
+	if validateID(id) != nil {
+		return "", time.Time{}, false
+	}
+	unix, err := strconv.ParseInt(base[sep+1:], 10, 64)
+	if err != nil {
+		return "", time.Time{}, false
+	}
+	return id, time.Unix(unix, 0), true
+}
+
+// validateID blocks path traversal and garbage before the string ever reaches
+// the filesystem. IDs are base64url of 16 random bytes → 22 chars.
+func validateID(id string) error {
+	if len(id) < 8 || len(id) > 64 {
+		return fmt.Errorf("invalid share id length")
+	}
+	for _, r := range id {
+		switch {
+		case r >= 'A' && r <= 'Z',
+			r >= 'a' && r <= 'z',
+			r >= '0' && r <= '9',
+			r == '-', r == '_':
+		default:
+			return fmt.Errorf("invalid share id char %q", r)
+		}
+	}
+	return nil
+}

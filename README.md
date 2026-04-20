@@ -257,6 +257,101 @@ Linked Sessions
   ← 1a2b3c4d codex  — Initial investigation (same bug)
 ```
 
+### Share (Preview)
+
+`ses share <id>` redacts a session transcript, uploads it to a share server you run, and returns a time-limited URL you can paste into Slack or a PR. Point it at your own instance — the hosted server is a pure-Go binary at `cmd/share-server` with a Dockerfile for deploio / any container platform. See [Running the share server](#running-the-share-server) below.
+
+```bash
+# One-time: configure the CLI against your share server
+ses share login --url https://share.example.com --token <bearer>
+
+# Preview what would be uploaded (no network)
+ses share a3f2 --dry-run
+
+# Upload for real — prints the URL on stdout, so `| pbcopy` works
+ses share a3f2 --expires 7d --name "auth bug repro"
+
+# Stricter redaction (also scrubs emails and URL paths)
+ses share a3f2 --dry-run --redact=strict
+
+# See what you've shared from this machine (expires + label)
+ses share list
+
+# Pull a share down early
+ses share revoke <share-id>
+```
+
+Example output header:
+
+```
+# Share preview: a3f2b5c6
+
+Project:   /Users/you/myapp
+Source:    claude
+Messages:  48
+Redaction: default
+
+## Redaction report
+  git-remote     1
+  path           12
+  secret         2
+  total:         486 chars removed
+
+## Scrubbed transcript
+...
+```
+
+**What the default mode scrubs:**
+
+| Rule | Catches |
+|---|---|
+| `path` | Replaces your home directory with `~` everywhere (content + file paths) |
+| `git-remote` | URLs like `https://user:token@host/…` and `ssh://user@host/…` |
+| `secret` | OpenAI (`sk-…`), Anthropic (`sk-ant-…`), GitHub PATs (`ghp_…`, `github_pat_…`), AWS keys (`AKIA…`), bearer tokens, JWTs, `-----BEGIN PRIVATE KEY-----` blocks, env assignments like `FOO_TOKEN=…` |
+| `long-paste` | Truncates any single message over 8 KB (2 KB in strict) |
+
+Strict mode additionally scrubs email addresses and the path/query portion of URLs.
+
+**How to help**: run `ses share <id> --dry-run` against your real sessions and [file an issue](https://github.com/timae/rel.ai/issues) if you see:
+
+- A secret shape that wasn't caught (tell us the *shape*, not the actual secret — e.g. "Stripe `sk_live_…` keys aren't matched")
+- A false positive that's scrubbing something harmless
+- A long paste that should have been kept intact
+
+No data leaves your machine when you run `--dry-run`. The output only goes to your terminal.
+
+#### Running the share server
+
+The server is a small HTTP service with four endpoints (upload, HTML view, raw download, revoke) and a background sweeper that deletes expired shares. Storage is filesystem-backed — persist a single directory and you keep state across restarts.
+
+```bash
+# Local run
+SHARE_BEARER=$(openssl rand -hex 24) \
+SHARE_PUBLIC_URL=http://localhost:8080 \
+SHARE_DATA_DIR=./data/shares \
+go run ./cmd/share-server
+
+# Container image
+docker build -f cmd/share-server/Dockerfile -t ses-share-server .
+docker run --rm \
+  -e SHARE_BEARER=$(openssl rand -hex 24) \
+  -e SHARE_PUBLIC_URL=https://share.example.com \
+  -v ses-share-data:/data \
+  -p 8080:8080 \
+  ses-share-server
+```
+
+| Env | Required | Default | Purpose |
+|---|---|---|---|
+| `SHARE_BEARER` | yes | — | Bearer token the CLI sends on upload + revoke |
+| `SHARE_PUBLIC_URL` | yes | — | External base URL, used when building share URLs |
+| `SHARE_DATA_DIR` | no | `/data/shares` (container) / `./data/shares` (local) | Storage directory |
+| `SHARE_ADDR` | no | `:8080` | Listen address |
+| `SHARE_SWEEP_INTERVAL` | no | `15m` | How often expired shares are deleted |
+| `SHARE_MAX_BODY_BYTES` | no | `10485760` | Upload cap (10 MB) |
+
+Deploying on [deploio](https://deplo.io) (Nine's PaaS) or any container platform: push the image, set the four env vars, mount a persistent volume at `/data`, done. Shares are single-file-per-upload so a nightly volume snapshot is sufficient backup.
+
 ## Running in Containers / Sandboxed Environments
 
 `ses` reads session data from `~/.claude/` and `~/.codex/` on the local filesystem. If you run Claude Code or Codex inside a container, DevContainer, or remote VM, you need to make the session data accessible.
@@ -387,6 +482,7 @@ ses/
   cmd/
     ses/main.go         # CLI entry point
     ses-menu/main.go    # Menu bar app entry point
+    share-server/       # HTTP service hosting expiring share links (Dockerfile)
     scan.go             # Import sessions
     list.go             # Browse with filters
     show.go             # Session details
@@ -398,11 +494,14 @@ ses/
     diff.go             # Git diff integration
     link.go             # Session chaining
     menu.go             # Menu bar launcher + LaunchAgent
+    share.go            # Share preview + (upcoming) upload
   internal/
     db/                 # SQLite + FTS5 schema, queries, stats, links
     scanner/            # Claude Code + Codex CLI parsers
     model/              # Unified session data types
     resume/             # Context blob generator (full + brief for chains)
+    redact/             # Pre-share transcript scrubbing (paths, secrets, creds)
+    shareserver/        # HTTP handlers, storage, HTML template for the share service
     display/            # Terminal formatting + stats dashboard
     tray/               # Menu bar app (macOS, robot icon)
     gitutil/            # Git diff/log utilities
