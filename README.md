@@ -352,6 +352,40 @@ docker run --rm \
 
 Deploying on [deploio](https://deplo.io) (Nine's PaaS) or any container platform: push the image, set the four env vars, mount a persistent volume at `/data`, done. Shares are single-file-per-upload so a nightly volume snapshot is sufficient backup.
 
+### Handoff (Mid-Session)
+
+Static share is read-only. If you're in the middle of a session and need to *hand it off* to a teammate so they can continue the task, use `ses handoff`:
+
+```bash
+# Sender (mid-stuck)
+ses handoff a3f2 \
+  --note "token refresh works, test flaky on refresh_rotation — look at tokens_spec.rb:142" \
+  --expires 24h \
+  --chain               # also bundle linked prior sessions
+# → prints: single-use handoff URL
+```
+
+```bash
+# Recipient, on their own machine
+cd ~/code/myapp                      # their copy of the project
+ses resume --from https://share.example.com/s/abc
+# → consumes the URL (deletes it server-side), saves a scrubbed local copy
+#   to ~/.ses/handoffs/, launches Claude Code with the note, transcript
+#   summary, linked-session chain, and files-touched manifest all injected
+#   as the system prompt.
+```
+
+`--project <path>` overrides which directory Claude Code launches in — defaults to the recipient's current working directory.
+
+**How this differs from static share:**
+
+- **Single-use by default.** The first `ses resume --from <url>` deletes the share server-side. Forwarding the URL after that returns 404.
+- **HTML view doesn't leak the transcript.** The claim page shows the note, metadata, files list, and the exact CLI command to run — but the messages are only returned to `POST /v1/shares/{id}/consume`, which the browser never calls.
+- **Shorter default expiry.** `ses handoff` defaults to 24h, not 7d — handoffs are meant to be picked up soon.
+- **Full context blob.** The recipient's Claude Code gets: the sender's note pinned at the top, the original session's metadata, the files-touched manifest, linked-session briefs, and a resume-style summary of the transcript — all redacted the same way static shares are.
+
+Because the claim URL is the capability, **only share the handoff URL with the intended recipient** (DM, not a public channel). Anyone with the URL who reaches `consume` first wins the claim.
+
 ## Running in Containers / Sandboxed Environments
 
 `ses` reads session data from `~/.claude/` and `~/.codex/` on the local filesystem. If you run Claude Code or Codex inside a container, DevContainer, or remote VM, you need to make the session data accessible.
@@ -494,7 +528,9 @@ ses/
     diff.go             # Git diff integration
     link.go             # Session chaining
     menu.go             # Menu bar launcher + LaunchAgent
-    share.go            # Share preview + (upcoming) upload
+    share.go            # ses share (snapshot upload + preview)
+    handoff.go          # ses handoff (single-use claim link for mid-session handoff)
+    resume_from.go      # ses resume --from <url> (claim a handoff)
   internal/
     db/                 # SQLite + FTS5 schema, queries, stats, links
     scanner/            # Claude Code + Codex CLI parsers

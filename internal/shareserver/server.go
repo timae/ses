@@ -56,18 +56,21 @@ func NewServer(cfg Config, store Store) (*Server, error) {
 	if cfg.Logger == nil {
 		cfg.Logger = log.Default()
 	}
-	tmpl, err := template.New("share").Funcs(tmplFuncs).Parse(sharePageHTML)
-	if err != nil {
-		return nil, fmt.Errorf("parsing template: %w", err)
+	tmpl := template.New("").Funcs(tmplFuncs)
+	if _, err := tmpl.New("snapshot").Parse(snapshotPageHTML); err != nil {
+		return nil, fmt.Errorf("parsing snapshot template: %w", err)
+	}
+	if _, err := tmpl.New("handoff").Parse(handoffPageHTML); err != nil {
+		return nil, fmt.Errorf("parsing handoff template: %w", err)
 	}
 	return &Server{cfg: cfg, store: store, tmpl: tmpl}, nil
 }
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/v1/shares", s.handleShares)      // POST
-	mux.HandleFunc("/v1/shares/", s.handleShareByID)  // DELETE /v1/shares/{id}
-	mux.HandleFunc("/s/", s.handleView)               // GET /s/{id}[/raw.json.gz]
+	mux.HandleFunc("/v1/shares", s.handleShares)     // POST
+	mux.HandleFunc("/v1/shares/", s.handleShareByID) // DELETE /v1/shares/{id}, POST /v1/shares/{id}/consume
+	mux.HandleFunc("/s/", s.handleView)              // GET /s/{id}[/raw.json.gz]
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
@@ -78,10 +81,18 @@ func (s *Server) Handler() http.Handler {
 // --- write: POST /v1/shares ----------------------------------------------
 
 type uploadRequest struct {
-	Name            string       `json:"name,omitempty"`
-	ExpiresInSecond int64        `json:"expires_in_seconds"`
-	Session         ShareSession `json:"session"`
-	Messages        []ShareMsg   `json:"messages"`
+	Name            string    `json:"name,omitempty"`
+	Kind            ShareKind `json:"kind,omitempty"`
+	ExpiresInSecond int64     `json:"expires_in_seconds"`
+	SingleUse       bool      `json:"single_use,omitempty"`
+
+	// Handoff-only
+	HandoffNote    string          `json:"handoff_note,omitempty"`
+	LinkedSessions []LinkedSession `json:"linked_sessions,omitempty"`
+	Files          []ShareFile     `json:"files,omitempty"`
+
+	Session  ShareSession `json:"session"`
+	Messages []ShareMsg   `json:"messages"`
 }
 
 type uploadResponse struct {
@@ -127,13 +138,26 @@ func (s *Server) handleShares(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().UTC()
 	expiresAt := now.Add(lifetime).UTC()
 
+	kind := req.Kind
+	if kind == "" {
+		kind = KindSnapshot
+	}
+	if kind != KindSnapshot && kind != KindHandoff {
+		s.replyError(w, http.StatusBadRequest, "invalid kind %q", kind)
+		return
+	}
 	share := Share{
-		ID:        id,
-		Name:      req.Name,
-		CreatedAt: now,
-		ExpiresAt: expiresAt,
-		Session:   req.Session,
-		Messages:  req.Messages,
+		ID:             id,
+		Name:           req.Name,
+		Kind:           kind,
+		CreatedAt:      now,
+		ExpiresAt:      expiresAt,
+		SingleUse:      req.SingleUse,
+		HandoffNote:    req.HandoffNote,
+		LinkedSessions: req.LinkedSessions,
+		Files:          req.Files,
+		Session:        req.Session,
+		Messages:       req.Messages,
 	}
 	gz, err := gzipJSON(share)
 	if err != nil {
@@ -159,8 +183,19 @@ func (s *Server) handleShares(w http.ResponseWriter, r *http.Request) {
 // --- write: DELETE /v1/shares/{id} ---------------------------------------
 
 func (s *Server) handleShareByID(w http.ResponseWriter, r *http.Request) {
-	id := strings.TrimPrefix(r.URL.Path, "/v1/shares/")
-	if id == "" || strings.Contains(id, "/") {
+	rest := strings.TrimPrefix(r.URL.Path, "/v1/shares/")
+	// /v1/shares/{id}/consume → routed to handleConsume; anything else is a
+	// direct DELETE on the id.
+	if id, tail, ok := splitOnce(rest, "/"); ok {
+		if tail == "consume" {
+			s.handleConsume(w, r, id)
+			return
+		}
+		http.NotFound(w, r)
+		return
+	}
+	id := rest
+	if id == "" {
 		http.NotFound(w, r)
 		return
 	}
@@ -183,6 +218,60 @@ func (s *Server) handleShareByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleConsume is the endpoint a handoff recipient's CLI calls. It returns
+// the full Share as decoded JSON and, for single-use shares, deletes the
+// stored object. Consume is unauthenticated: the share URL itself is the
+// capability, and handoff URLs are single-use by design.
+//
+// Race note: under concurrent calls, two clients can both receive the
+// payload before Delete lands. That's acceptable — a handoff URL in
+// practice goes to one person, and a forked claim isn't worse than the
+// sender continuing on their own machine.
+func (s *Server) handleConsume(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	gz, _, err := s.store.Get(r.Context(), id)
+	switch {
+	case errors.Is(err, ErrNotFound):
+		http.NotFound(w, r)
+		return
+	case errors.Is(err, ErrExpired):
+		_ = s.store.Delete(context.Background(), id)
+		http.Error(w, "this share has expired", http.StatusGone)
+		return
+	case err != nil:
+		s.cfg.Logger.Printf("consume get %s: %v", id, err)
+		http.Error(w, "storage error", http.StatusInternalServerError)
+		return
+	}
+	share, err := decodeShare(gz)
+	if err != nil {
+		s.cfg.Logger.Printf("consume decode %s: %v", id, err)
+		http.Error(w, "malformed share", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	_ = json.NewEncoder(w).Encode(share)
+	if share.SingleUse {
+		if err := s.store.Delete(context.Background(), id); err != nil {
+			s.cfg.Logger.Printf("consume delete %s: %v", id, err)
+		}
+	}
+}
+
+// splitOnce returns (head, tail, true) if s contains sep, otherwise ("", "", false).
+func splitOnce(s, sep string) (string, string, bool) {
+	i := strings.Index(s, sep)
+	if i < 0 {
+		return "", "", false
+	}
+	return s[:i], s[i+len(sep):], true
 }
 
 // --- read: GET /s/{id} and /s/{id}/raw.json.gz ---------------------------
@@ -219,10 +308,29 @@ func (s *Server) handleView(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Handoff shares never leak their transcript via the HTML or raw paths.
+	// The only way to get the body is POST /v1/shares/{id}/consume from the
+	// CLI. That's what makes them safe to share without a bearer token.
+	share, decodeErr := decodeShare(gz)
+	if decodeErr != nil {
+		s.cfg.Logger.Printf("decoding share %s: %v", id, decodeErr)
+		http.Error(w, "malformed share", http.StatusInternalServerError)
+		return
+	}
+	isHandoff := share.Kind == KindHandoff
+
 	switch tail {
 	case "":
-		s.renderHTML(w, r, gz, exp)
+		if isHandoff {
+			s.renderHandoffClaim(w, share, exp)
+			return
+		}
+		s.renderHTML(w, share, exp)
 	case "raw.json.gz":
+		if isHandoff {
+			http.Error(w, "handoff shares can only be claimed via `ses resume --from <url>`", http.StatusForbidden)
+			return
+		}
 		s.serveRaw(w, gz, id)
 	default:
 		http.NotFound(w, r)
@@ -236,13 +344,7 @@ func (s *Server) serveRaw(w http.ResponseWriter, gz []byte, id string) {
 	_, _ = w.Write(gz)
 }
 
-func (s *Server) renderHTML(w http.ResponseWriter, r *http.Request, gz []byte, exp time.Time) {
-	share, err := decodeShare(gz)
-	if err != nil {
-		s.cfg.Logger.Printf("decoding share: %v", err)
-		http.Error(w, "malformed share", http.StatusInternalServerError)
-		return
-	}
+func (s *Server) renderHTML(w http.ResponseWriter, share Share, exp time.Time) {
 	remaining := time.Until(exp).Round(time.Minute)
 	data := map[string]any{
 		"Share":     share,
@@ -252,7 +354,23 @@ func (s *Server) renderHTML(w http.ResponseWriter, r *http.Request, gz []byte, e
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	if err := s.tmpl.Execute(w, data); err != nil {
+	if err := s.tmpl.ExecuteTemplate(w, "snapshot", data); err != nil {
+		s.cfg.Logger.Printf("template exec: %v", err)
+	}
+}
+
+func (s *Server) renderHandoffClaim(w http.ResponseWriter, share Share, exp time.Time) {
+	remaining := time.Until(exp).Round(time.Minute)
+	claimURL := fmt.Sprintf("%s/s/%s", s.cfg.PublicURL, share.ID)
+	data := map[string]any{
+		"Share":     share,
+		"Expires":   exp,
+		"Remaining": remaining.String(),
+		"ClaimURL":  claimURL,
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	if err := s.tmpl.ExecuteTemplate(w, "handoff", data); err != nil {
 		s.cfg.Logger.Printf("template exec: %v", err)
 	}
 }
@@ -316,7 +434,7 @@ var tmplFuncs = template.FuncMap{
 	},
 }
 
-const sharePageHTML = `<!doctype html>
+const snapshotPageHTML = `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -361,6 +479,70 @@ const sharePageHTML = `<!doctype html>
 <footer>
   Share id <code>{{.Share.ID}}</code> · <a href="{{.RawURL}}">download raw (gzip)</a>
 </footer>
+</body>
+</html>
+`
+
+const handoffPageHTML = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Handoff · {{if .Share.Name}}{{.Share.Name}}{{else}}{{.Share.Session.ShortID}}{{end}}</title>
+<meta name="robots" content="noindex,nofollow">
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 15px/1.5 -apple-system, system-ui, sans-serif; max-width: 760px; margin: 2rem auto; padding: 0 1rem; }
+  header { border-bottom: 1px solid #8883; padding-bottom: 1rem; margin-bottom: 1.5rem; }
+  h1 { font-size: 1.4rem; margin: 0 0 .25rem; }
+  .meta { color: #888; font-size: .85rem; }
+  .meta span { margin-right: 1rem; }
+  .note { background: #fffbe6; color: #5a4400; padding: 1rem; border-radius: 6px; border-left: 3px solid #e1b945; margin: 1rem 0; white-space: pre-wrap; }
+  @media (prefers-color-scheme: dark) { .note { background: #3a2f0f; color: #f0d78f; border-color: #c2a13a; } }
+  pre.cmd { background: #f5f5f7; padding: .75rem 1rem; border-radius: 4px; overflow-x: auto; font: 13px/1.4 ui-monospace, "SF Mono", monospace; }
+  @media (prefers-color-scheme: dark) { pre.cmd { background: #1f1f21; } }
+  .files { font-size: .9rem; }
+  .files li { font-family: ui-monospace, "SF Mono", monospace; }
+  .action { display: inline-block; font-size: .7rem; text-transform: uppercase; color: #888; margin-right: .5em; min-width: 3em; }
+  .expiry { color: #888; font-size: .85rem; margin-top: 2rem; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Session handoff</h1>
+  <div class="meta">
+    <span>{{.Share.Session.Source}}{{if .Share.Session.Model}} · {{.Share.Session.Model}}{{end}}</span>
+    <span>{{.Share.Session.Project}}</span>
+    {{if .Share.Session.GitBranch}}<span>{{.Share.Session.GitBranch}}</span>{{end}}
+    <span>{{.Share.Session.MessageCount}} messages</span>
+  </div>
+</header>
+
+{{if .Share.HandoffNote}}
+<div class="note">{{.Share.HandoffNote}}</div>
+{{end}}
+
+<p>To continue this session on your machine:</p>
+<pre class="cmd">cd /path/to/your/checkout
+ses resume --from {{.ClaimURL}}</pre>
+
+<p>The CLI will download the full context and launch Claude Code with the transcript, linked sessions, and this note pre-loaded. <strong>This link is single-use</strong> — it is deleted after the first successful <code>ses resume --from</code>.</p>
+
+{{if .Share.Files}}
+<h2 style="font-size: 1rem; margin-top: 2rem;">Files touched in the original session</h2>
+<ul class="files">
+{{range .Share.Files}}  <li><span class="action">{{.Action}}</span>{{.Path}}</li>
+{{end}}</ul>
+{{end}}
+
+{{if .Share.LinkedSessions}}
+<h2 style="font-size: 1rem; margin-top: 2rem;">Linked prior sessions ({{len .Share.LinkedSessions}})</h2>
+<p style="color: #888; font-size: .85rem;">The full briefs are included in the context blob when you claim the handoff.</p>
+<ul>
+{{range .Share.LinkedSessions}}  <li><code>{{.ShortID}}</code>{{if .FirstPrompt}} — {{.FirstPrompt}}{{end}}{{if .Reason}} <em>({{.Reason}})</em>{{end}}</li>
+{{end}}</ul>
+{{end}}
+
+<p class="expiry">Expires {{fmtTime .Expires}} · {{.Remaining}} remaining · id <code>{{.Share.ID}}</code></p>
 </body>
 </html>
 `

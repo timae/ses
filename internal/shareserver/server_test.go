@@ -185,6 +185,113 @@ func TestDeleteRemovesShare(t *testing.T) {
 	}
 }
 
+func TestConsumeSingleUseDeletes(t *testing.T) {
+	ts, _ := newTestServer(t)
+	body := uploadRequest{
+		Kind:            KindHandoff,
+		ExpiresInSecond: int64((1 * time.Hour).Seconds()),
+		SingleUse:       true,
+		HandoffNote:     "pick up the auth branch",
+		Session:         ShareSession{ShortID: "abc", StartedAt: time.Now()},
+		Messages:        []ShareMsg{{Role: "user", Content: "hi"}},
+	}
+	resp := upload(t, ts, body, "test-token")
+	var ur uploadResponse
+	_ = json.NewDecoder(resp.Body).Decode(&ur)
+	resp.Body.Close()
+
+	// First consume returns the share.
+	cResp, _ := ts.Client().Post(ts.URL+"/v1/shares/"+ur.ID+"/consume", "", nil)
+	if cResp.StatusCode != http.StatusOK {
+		t.Fatalf("consume status = %d", cResp.StatusCode)
+	}
+	var got Share
+	_ = json.NewDecoder(cResp.Body).Decode(&got)
+	cResp.Body.Close()
+	if got.HandoffNote != "pick up the auth branch" {
+		t.Errorf("handoff note missing: %+v", got)
+	}
+	if got.Kind != KindHandoff {
+		t.Errorf("kind = %q, want handoff", got.Kind)
+	}
+
+	// Second consume returns 404 because the share was deleted.
+	cResp2, _ := ts.Client().Post(ts.URL+"/v1/shares/"+ur.ID+"/consume", "", nil)
+	defer cResp2.Body.Close()
+	if cResp2.StatusCode != http.StatusNotFound {
+		t.Fatalf("second consume status = %d, want 404", cResp2.StatusCode)
+	}
+}
+
+func TestConsumeNonSingleUseKeeps(t *testing.T) {
+	ts, _ := newTestServer(t)
+	body := uploadRequest{
+		Kind:            KindSnapshot,
+		ExpiresInSecond: int64((1 * time.Hour).Seconds()),
+		Session:         ShareSession{ShortID: "abc", StartedAt: time.Now()},
+		Messages:        []ShareMsg{{Role: "user", Content: "hi"}},
+	}
+	resp := upload(t, ts, body, "test-token")
+	var ur uploadResponse
+	_ = json.NewDecoder(resp.Body).Decode(&ur)
+	resp.Body.Close()
+
+	for i := 0; i < 2; i++ {
+		c, _ := ts.Client().Post(ts.URL+"/v1/shares/"+ur.ID+"/consume", "", nil)
+		c.Body.Close()
+		if c.StatusCode != http.StatusOK {
+			t.Fatalf("consume #%d: status = %d", i, c.StatusCode)
+		}
+	}
+}
+
+func TestHandoffHTMLDoesNotLeakTranscript(t *testing.T) {
+	ts, _ := newTestServer(t)
+	secret := "SECRET-TRANSCRIPT-CONTENTS-SHOULD-NOT-APPEAR-IN-HTML"
+	body := uploadRequest{
+		Kind:            KindHandoff,
+		ExpiresInSecond: int64((1 * time.Hour).Seconds()),
+		SingleUse:       true,
+		HandoffNote:     "continue the refactor",
+		Files: []ShareFile{
+			{Path: "~/app/src/auth.go", Action: "edit"},
+		},
+		Session:  ShareSession{ShortID: "abc", StartedAt: time.Now()},
+		Messages: []ShareMsg{{Role: "user", Content: secret}},
+	}
+	resp := upload(t, ts, body, "test-token")
+	var ur uploadResponse
+	_ = json.NewDecoder(resp.Body).Decode(&ur)
+	resp.Body.Close()
+
+	// HTML view
+	hResp, _ := ts.Client().Get(ts.URL + "/s/" + ur.ID)
+	html, _ := io.ReadAll(hResp.Body)
+	hResp.Body.Close()
+	if bytes.Contains(html, []byte(secret)) {
+		t.Fatalf("handoff HTML leaked transcript content")
+	}
+	if !bytes.Contains(html, []byte("continue the refactor")) {
+		t.Errorf("handoff note missing from HTML")
+	}
+	if !bytes.Contains(html, []byte("ses resume --from")) {
+		t.Errorf("claim command missing from HTML")
+	}
+	if !bytes.Contains(html, []byte("single-use")) {
+		t.Errorf("single-use disclosure missing from HTML")
+	}
+	if !bytes.Contains(html, []byte("~/app/src/auth.go")) {
+		t.Errorf("files-touched list missing from HTML")
+	}
+
+	// Raw download is blocked for handoff
+	rResp, _ := ts.Client().Get(ts.URL + "/s/" + ur.ID + "/raw.json.gz")
+	defer rResp.Body.Close()
+	if rResp.StatusCode != http.StatusForbidden {
+		t.Fatalf("raw.json.gz for handoff should be 403, got %d", rResp.StatusCode)
+	}
+}
+
 func TestHealthz(t *testing.T) {
 	ts, _ := newTestServer(t)
 	resp, _ := ts.Client().Get(ts.URL + "/healthz")

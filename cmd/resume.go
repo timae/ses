@@ -18,9 +18,11 @@ import (
 )
 
 var (
-	resumeInject bool
-	resumeChain  bool
-	resumeTarget string
+	resumeInject  bool
+	resumeChain   bool
+	resumeTarget  string
+	resumeFrom    string
+	resumeProject string
 )
 
 var resumeCmd = &cobra.Command{
@@ -29,6 +31,15 @@ var resumeCmd = &cobra.Command{
 	Long:  "Reads the session transcript and generates markdown suitable for pasting into a new AI session.\nRun without an ID to get an interactive session picker with search.\n\nUsage:\n  ses resume              Interactive picker\n  ses resume <id> | pbcopy\n  ses resume <id> --inject     Launch a new CLI session with context\n  ses resume <id> --chain      Include linked sessions in context",
 	Args:  cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// Handoff claim path: doesn't need a local session, doesn't touch the
+		// DB, always consumes + launches in the target project directory.
+		if resumeFrom != "" {
+			if len(args) > 0 {
+				return fmt.Errorf("--from and a session id are mutually exclusive")
+			}
+			return runResumeFromURL(resumeFrom, resumeProject)
+		}
+
 		var session *model.Session
 		var err error
 
@@ -316,5 +327,7 @@ func init() {
 	resumeCmd.Flags().BoolVar(&resumeInject, "inject", false, "launch a new CLI session with context pre-loaded")
 	resumeCmd.Flags().BoolVar(&resumeChain, "chain", false, "include linked sessions in context")
 	resumeCmd.Flags().StringVar(&resumeTarget, "target", "", "target CLI (claude|codex), defaults to session source")
+	resumeCmd.Flags().StringVar(&resumeFrom, "from", "", "claim a handoff URL from a teammate (single-use, launches Claude Code)")
+	resumeCmd.Flags().StringVar(&resumeProject, "project", "", "project directory for --from (default: current working directory)")
 	rootCmd.AddCommand(resumeCmd)
 }
