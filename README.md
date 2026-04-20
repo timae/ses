@@ -320,6 +320,41 @@ Strict mode additionally scrubs email addresses and the path/query portion of UR
 
 No data leaves your machine when you run `--dry-run`. The output only goes to your terminal.
 
+#### Vibe pairing (showing each other how you work with Claude)
+
+Static share isn't only for "I'm stuck, look at this." It's also how you show teammates *how you work* with Claude Code — the prompt craft, the tool sequencing, the knowing-when-to-course-correct. `ses search` + `ses share` turns any session that went well into a one-URL case study. This is the closest thing to pair-programming you get when the other half of the pair is an AI.
+
+Concrete flow:
+
+```bash
+# 1. You just had a great session — Claude one-shot a tricky migration.
+#    Find it.
+ses search "user_role migration"
+
+# 2. Share it with a long expiry and a descriptive name so it still makes
+#    sense when a teammate opens the link next week.
+ses share 4b29 \
+  --expires 30d \
+  --name "migration: plan-first, one-tool-per-turn, early sanity-check"
+
+# 3. Drop the URL in #ai-eng with one line about the technique:
+#    "the trick was asking for the plan BEFORE the edits — the model
+#    caught two bad assumptions I'd have merged otherwise. URL: …"
+```
+
+Teammates open the URL in a browser (no CLI needed) and read the full transcript — scrubbed the same way as any share, so paths and secrets are safe while the underlying *technique* is what comes through: the exact prompts you used, when you interrupted, how you phrased corrections, which tools ran in which order.
+
+**When static share fits vibe pairing**, and when it doesn't:
+
+| Situation | Reach for |
+|---|---|
+| "Look at this session I had — this prompt pattern is worth copying" | `ses share` (long expiry, descriptive `--name`, broadcast to channel) |
+| "I want to riff with you on this pattern live" | Screenshare — no amount of async shared sessions beats seeing each other's cursor move |
+| "I'm stuck, can you take over from where I am" | `ses handoff` — see below |
+| "Here's a pattern I want to pin for the team's handbook" | `ses share` + link it from your internal docs; renew before 30 days expire, or bump `--expires` |
+
+Because static-share URLs are link-as-capability (anyone with the URL can read), pick the expiry deliberately — 30 days is generous for a "come learn from this" link, but if the transcript references internal code, prefer 7d and re-share on demand.
+
 #### Running the share server
 
 The server is a small HTTP service with four endpoints (upload, HTML view, raw download, revoke) and a background sweeper that deletes expired shares. Storage is filesystem-backed — persist a single directory and you keep state across restarts.
