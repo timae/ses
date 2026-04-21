@@ -61,6 +61,8 @@ ses resume a3f2 --inject
 | `ses list [flags]` | Browse sessions with filters (`--since`, `--until`, `--project`, `--source`, `--tag`, `--limit`) |
 | `ses show <id>` | Display session details: metadata, conversation summary, files touched, linked sessions |
 | `ses search <query>` | Full-text search (FTS5) across session content |
+| `ses paste <id>` | Dump user turns (pastes) — full content, `--turn N` or `--grep PATTERN` |
+| `ses pastes` | List big pastes across all sessions, filter by `--min`, `--shape`, `--since`, etc. |
 | `ses tag <id> <tags>` | Add/remove comma-separated tags (`--remove` to delete) |
 
 ```bash
@@ -256,6 +258,44 @@ Linked Sessions
   → b5c6d7e8 claude — Run the full test suite (continuing auth fix)
   ← 1a2b3c4d codex  — Initial investigation (same bug)
 ```
+
+### Paste Recovery
+
+"I pasted a big JSON / log / file into Claude at some point but the assistant can't recall it, and I don't remember when or in which session." Two commands bridge that gap.
+
+```bash
+# List every big user paste across all sessions, biggest first
+ses pastes                          # default: turns ≥ 2 KB
+ses pastes --min 500 --limit 100    # smaller threshold, longer list
+ses pastes --shape json             # only turns that look like JSON
+ses pastes --shape log --since 2026-03-01
+ses pastes --project myapp
+```
+
+Output is one row per turn — session id · turn # · size · detected shape · when · first 80 chars:
+
+```
+SESSION     TURN   SIZE      SHAPE  WHEN         PREVIEW
+9438865e    14     92.3KB    log    2026-03-20   2026-03-20 14:38:44.964 DEBUG: [ContentDelivery.Uploader…
+e8a10aed    7      25.7KB    xml    2026-03-18   <task-notification>
+fb07663f    23     11.0KB    json   2026-03-09   [{"name":"Alt-Svc","value":"h3=…"}]
+```
+
+Scan the list, recognize the one you mean, then dump it:
+
+```bash
+# Dump every user turn in a session, separated by headers on stderr
+ses paste 9438865e
+
+# Or just the one turn you want, straight to stdout (pipes cleanly)
+ses paste 9438865e --turn 14 | pbcopy
+ses paste 9438865e --turn 14 > recovered.log
+
+# Or filter by regex across all turns
+ses paste 9438865e --grep "ERROR|FATAL"
+```
+
+**What's going on under the hood:** the scanner has always stored the full text of every user turn (no truncation) in SQLite's `user_prompts` table. `ses pastes` queries that table with a `LENGTH(content) >= ?` filter; shape is a set of cheap heuristics applied at query time (no migration, no reindex). If you scanned sessions months ago, your old big pastes show up the moment you run `ses pastes`.
 
 ### Share (Preview)
 
@@ -566,12 +606,14 @@ ses/
     share.go            # ses share (snapshot upload + preview)
     handoff.go          # ses handoff (single-use claim link for mid-session handoff)
     resume_from.go      # ses resume --from <url> (claim a handoff)
+    paste.go            # ses paste + ses pastes (recover big user pastes)
   internal/
     db/                 # SQLite + FTS5 schema, queries, stats, links
     scanner/            # Claude Code + Codex CLI parsers
     model/              # Unified session data types
     resume/             # Context blob generator (full + brief for chains)
     redact/             # Pre-share transcript scrubbing (paths, secrets, creds)
+    shape/              # Heuristic paste classifier (json, log, xml, yaml, text)
     shareserver/        # HTTP handlers, storage, HTML template for the share service
     display/            # Terminal formatting + stats dashboard
     tray/               # Menu bar app (macOS, robot icon)
