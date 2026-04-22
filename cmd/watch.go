@@ -14,8 +14,8 @@ import (
 	"github.com/fatih/color"
 	"github.com/fsnotify/fsnotify"
 	"github.com/spf13/cobra"
-	"github.com/timae/rel.ai/internal/display"
-	"github.com/timae/rel.ai/internal/scanner"
+	"github.com/timae/ses/internal/display"
+	"github.com/timae/ses/internal/scanner"
 )
 
 var (
@@ -25,7 +25,12 @@ var (
 	watchStatus    bool
 )
 
-const launchAgentLabel = "ai.rel.ses.watch"
+const (
+	launchAgentLabel = "io.timae.ses.watch"
+	// legacyWatchLabel is the pre-v0.6 label, kept only so install/uninstall
+	// flows can clean up an old agent on machines upgraded from older builds.
+	legacyWatchLabel = "ai.rel.ses.watch"
+)
 
 var watchCmd = &cobra.Command{
 	Use:   "watch",
@@ -261,6 +266,10 @@ func installDaemon() error {
 
 	plistPath := launchAgentPath()
 
+	// Migrate any pre-v0.6 agent + its plist so upgraders don't end up
+	// with two daemons running side by side.
+	migrateLegacyAgent(legacyWatchLabel)
+
 	// Unload existing if present (tolerant — may not be loaded).
 	bootoutAgent(launchAgentLabel)
 
@@ -298,6 +307,7 @@ func uninstallDaemon() error {
 	}
 
 	bootoutAgent(launchAgentLabel)
+	migrateLegacyAgent(legacyWatchLabel)
 
 	if err := os.Remove(plistPath); err != nil {
 		return fmt.Errorf("removing plist: %w", err)

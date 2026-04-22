@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 )
 
 // LaunchAgent load/unload helpers that target the modern `launchctl` API
@@ -19,7 +20,7 @@ func userDomain() string {
 }
 
 // serviceTarget returns the domain-qualified service target
-// (e.g. "gui/501/ai.rel.ses.menu") used with bootout / kickstart.
+// (e.g. "gui/501/io.timae.ses.menu") used with bootout / kickstart.
 func serviceTarget(label string) string {
 	return fmt.Sprintf("%s/%s", userDomain(), label)
 }
@@ -42,4 +43,14 @@ func bootstrapAgent(plistPath, label string) error {
 // when the user never successfully loaded the agent in the first place.
 func bootoutAgent(label string) {
 	exec.Command("launchctl", "bootout", serviceTarget(label)).Run()
+}
+
+// migrateLegacyAgent boots out a pre-rename agent and removes its plist.
+// Used during install/uninstall of the current labels so upgraders from
+// older builds don't leave orphaned agents behind.
+func migrateLegacyAgent(legacyLabel string) {
+	bootoutAgent(legacyLabel)
+	home, _ := os.UserHomeDir()
+	legacyPlist := filepath.Join(home, "Library", "LaunchAgents", legacyLabel+".plist")
+	_ = os.Remove(legacyPlist) // tolerant: may not exist
 }

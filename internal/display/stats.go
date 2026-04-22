@@ -8,7 +8,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/fatih/color"
-	"github.com/timae/rel.ai/internal/db"
+	"github.com/timae/ses/internal/db"
 )
 
 func StatsDashboard(s *db.Stats) {

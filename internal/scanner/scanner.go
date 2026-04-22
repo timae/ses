@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/timae/rel.ai/internal/db"
-	"github.com/timae/rel.ai/internal/model"
+	"github.com/timae/ses/internal/db"
+	"github.com/timae/ses/internal/model"
 )
 
 type SessionFile struct {

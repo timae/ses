@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 
 	"github.com/spf13/cobra"
-	"github.com/timae/rel.ai/internal/db"
+	"github.com/timae/ses/internal/db"
 )
 
 var (

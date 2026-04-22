@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/timae/rel.ai/internal/model"
+	"github.com/timae/ses/internal/model"
 )
 
 type LinkedSession struct {

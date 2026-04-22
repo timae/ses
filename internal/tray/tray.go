@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/caseymrm/menuet"
-	"github.com/timae/rel.ai/internal/db"
-	"github.com/timae/rel.ai/internal/display"
+	"github.com/timae/ses/internal/db"
+	"github.com/timae/ses/internal/display"
 )
 
 // Search state is held at the package level because menuet rebuilds the menu
@@ -45,7 +45,7 @@ func Run() {
 	app.SetMenuState(&menuet.MenuState{
 		Title: "🤖",
 	})
-	app.Label = "ai.rel.ses.menu"
+	app.Label = "io.timae.ses.menu"
 	app.Children = menuItems
 	app.RunApplication()
 }
@@ -184,8 +184,13 @@ func refreshLoop() {
 }
 
 func isDaemonRunning() bool {
-	err := exec.Command("launchctl", "list", "ai.rel.ses.watch").Run()
-	return err == nil
+	// Check the current label first; fall back to the pre-v0.6 label so a
+	// freshly-upgraded user whose daemon hasn't been reinstalled yet still
+	// sees "Daemon: running" correctly.
+	if exec.Command("launchctl", "list", "io.timae.ses.watch").Run() == nil {
+		return true
+	}
+	return exec.Command("launchctl", "list", "ai.rel.ses.watch").Run() == nil
 }
 
 func sesBin() string {

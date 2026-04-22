@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/timae/rel.ai/internal/model"
+	"github.com/timae/ses/internal/model"
 )
 
 func Generate(session *model.Session, messages []model.Message) string {

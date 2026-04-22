@@ -9,8 +9,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/spf13/cobra"
-	"github.com/timae/rel.ai/internal/db"
-	"github.com/timae/rel.ai/internal/shape"
+	"github.com/timae/ses/internal/db"
+	"github.com/timae/ses/internal/shape"
 )
 
 var (

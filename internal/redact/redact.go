@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/timae/rel.ai/internal/model"
+	"github.com/timae/ses/internal/model"
 )
 
 // Mode controls which rules run.

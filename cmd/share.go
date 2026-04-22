@@ -14,9 +14,9 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/timae/rel.ai/internal/model"
-	"github.com/timae/rel.ai/internal/redact"
-	"github.com/timae/rel.ai/internal/shareserver"
+	"github.com/timae/ses/internal/model"
+	"github.com/timae/ses/internal/redact"
+	"github.com/timae/ses/internal/shareserver"
 )
 
 var (

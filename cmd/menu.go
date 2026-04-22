@@ -16,7 +16,11 @@ var (
 	menuUninstall bool
 )
 
-const menuAgentLabel = "ai.rel.ses.menu"
+const (
+	menuAgentLabel = "io.timae.ses.menu"
+	// legacyMenuLabel is the pre-v0.6 label, kept only for migration cleanup.
+	legacyMenuLabel = "ai.rel.ses.menu"
+)
 
 var menuCmd = &cobra.Command{
 	Use:   "menu",
@@ -62,7 +66,7 @@ func findMenuBinary() (string, error) {
 		return path, nil
 	}
 
-	return "", fmt.Errorf("ses-menu binary not found — build it with: go install github.com/timae/rel.ai/cmd/ses-menu@latest")
+	return "", fmt.Errorf("ses-menu binary not found — build it with: go install github.com/timae/ses/cmd/ses-menu@latest")
 }
 
 func menuAgentPath() string {
@@ -108,6 +112,9 @@ func installMenuAgent() error {
 `, menuAgentLabel, bin, logPath, logPath)
 
 	plistPath := menuAgentPath()
+	// Migrate any pre-v0.6 agent + its plist so the menu bar doesn't
+	// end up with two robots.
+	migrateLegacyAgent(legacyMenuLabel)
 	bootoutAgent(menuAgentLabel)
 
 	if err := os.MkdirAll(filepath.Dir(plistPath), 0755); err != nil {
@@ -141,6 +148,7 @@ func uninstallMenuAgent() error {
 	}
 
 	bootoutAgent(menuAgentLabel)
+	migrateLegacyAgent(legacyMenuLabel)
 	os.Remove(plistPath)
 
 	color.New(color.FgYellow).Println("Menu bar agent uninstalled.")

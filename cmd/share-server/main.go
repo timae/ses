@@ -23,7 +23,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/timae/rel.ai/internal/shareserver"
+	"github.com/timae/ses/internal/shareserver"
 )
 
 func main() {

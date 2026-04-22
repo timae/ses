@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/timae/rel.ai/internal/model"
+	"github.com/timae/ses/internal/model"
 )
 
 // PasteRow is one row returned by ListPastes: a single user turn with enough

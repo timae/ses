@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/timae/rel.ai/internal/model"
-	"github.com/timae/rel.ai/internal/resume"
-	"github.com/timae/rel.ai/internal/shareserver"
+	"github.com/timae/ses/internal/model"
+	"github.com/timae/ses/internal/resume"
+	"github.com/timae/ses/internal/shareserver"
 )
 
 // runResumeFromURL claims a handoff and launches Claude Code (or Codex) in

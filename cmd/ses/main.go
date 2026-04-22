@@ -3,7 +3,7 @@ package main
 import (
 	"os"
 
-	commands "github.com/timae/rel.ai/cmd"
+	commands "github.com/timae/ses/cmd"
 )
 
 func main() {

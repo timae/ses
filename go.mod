@@ -1,4 +1,4 @@
-module github.com/timae/rel.ai
+module github.com/timae/ses
 
 go 1.25.0
 

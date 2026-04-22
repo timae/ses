@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-	"github.com/timae/rel.ai/internal/gitutil"
+	"github.com/timae/ses/internal/gitutil"
 )
 
 var (

@@ -11,10 +11,10 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
-	"github.com/timae/rel.ai/internal/db"
-	"github.com/timae/rel.ai/internal/model"
-	"github.com/timae/rel.ai/internal/picker"
-	"github.com/timae/rel.ai/internal/resume"
+	"github.com/timae/ses/internal/db"
+	"github.com/timae/ses/internal/model"
+	"github.com/timae/ses/internal/picker"
+	"github.com/timae/ses/internal/resume"
 )
 
 var (

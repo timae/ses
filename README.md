@@ -1,4 +1,4 @@
-# rel.ai — AI Session Manager
+# ses — AI Session Manager
 
 A CLI tool that captures, indexes, and resumes abandoned Claude Code and OpenAI Codex sessions. Never lose context from an interrupted AI coding session again.
 
@@ -6,14 +6,14 @@ A CLI tool that captures, indexes, and resumes abandoned Claude Code and OpenAI 
 
 You start an AI coding session, get distracted or close the terminal, and later can't remember what you were working on or where you left off. Both Claude Code and Codex CLI store rich session data locally, but provide no way to browse, search, or resume past sessions.
 
-**rel.ai** is your safety net — it scans local session data, builds a searchable index, and generates context blobs you can paste into a new session to pick up exactly where you left off.
+**ses** is your safety net — it scans local session data, builds a searchable index, and generates context blobs you can paste into a new session to pick up exactly where you left off.
 
 ## Install
 
 ### CLI
 
 ```bash
-go install github.com/timae/rel.ai/cmd/ses@latest
+go install github.com/timae/ses/cmd/ses@latest
 ```
 
 > Requires `~/go/bin` in your `$PATH`. Add `export PATH="$HOME/go/bin:$PATH"` to your `~/.zshrc` or `~/.bashrc` if not already set.
@@ -21,7 +21,7 @@ go install github.com/timae/rel.ai/cmd/ses@latest
 ### Menu Bar App (macOS)
 
 ```bash
-go install github.com/timae/rel.ai/cmd/ses-menu@latest
+go install github.com/timae/ses/cmd/ses-menu@latest
 ```
 
 > Requires CGo (`CGO_ENABLED=1`) and Xcode Command Line Tools.
@@ -29,8 +29,8 @@ go install github.com/timae/rel.ai/cmd/ses-menu@latest
 Or build both from source:
 
 ```bash
-git clone https://github.com/timae/rel.ai.git
-cd rel.ai
+git clone https://github.com/timae/ses.git
+cd ses
 go build -o ses ./cmd/ses
 CGO_ENABLED=1 go build -o ses-menu ./cmd/ses-menu
 ```
@@ -115,7 +115,7 @@ The daemon monitors `~/.claude/projects/` and `~/.codex/sessions/` for new or mo
 $ ses watch --install
 Daemon installed and started.
   Binary:  ~/go/bin/ses
-  Plist:   ~/Library/LaunchAgents/ai.rel.ses.watch.plist
+  Plist:   ~/Library/LaunchAgents/io.timae.ses.watch.plist
   Log:     ~/.ses/watch.log
 
 Sessions will be indexed automatically from now on.
@@ -356,7 +356,7 @@ Redaction: default
 
 Strict mode additionally scrubs email addresses and the path/query portion of URLs.
 
-**How to help**: run `ses share <id> --dry-run` against your real sessions and [file an issue](https://github.com/timae/rel.ai/issues) if you see:
+**How to help**: run `ses share <id> --dry-run` against your real sessions and [file an issue](https://github.com/timae/ses/issues) if you see:
 
 - A secret shape that wasn't caught (tell us the *shape*, not the actual secret — e.g. "Stripe `sk_live_…` keys aren't matched")
 - A false positive that's scrubbing something harmless
@@ -495,7 +495,7 @@ Then run `ses` on the host as normal — the daemon picks up sessions automatica
 Add `ses` to your container image:
 
 ```dockerfile
-RUN go install github.com/timae/rel.ai/cmd/ses@latest
+RUN go install github.com/timae/ses/cmd/ses@latest
 ```
 
 Run `ses scan` and `ses list` inside the container. Note that the background daemon and menu bar app are host-only features.

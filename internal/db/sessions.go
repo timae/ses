@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/timae/rel.ai/internal/model"
+	"github.com/timae/ses/internal/model"
 )
 
 func (db *DB) InsertSession(s *model.Session, messages []model.Message) error {

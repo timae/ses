@@ -4,7 +4,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-	"github.com/timae/rel.ai/internal/display"
+	"github.com/timae/ses/internal/display"
 )
 
 var searchLimit int
