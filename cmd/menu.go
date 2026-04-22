@@ -108,7 +108,7 @@ func installMenuAgent() error {
 `, menuAgentLabel, bin, logPath, logPath)
 
 	plistPath := menuAgentPath()
-	exec.Command("launchctl", "unload", plistPath).Run()
+	bootoutAgent(menuAgentLabel)
 
 	if err := os.MkdirAll(filepath.Dir(plistPath), 0755); err != nil {
 		return err
@@ -118,7 +118,7 @@ func installMenuAgent() error {
 		return err
 	}
 
-	if err := exec.Command("launchctl", "load", plistPath).Run(); err != nil {
+	if err := bootstrapAgent(plistPath, menuAgentLabel); err != nil {
 		return fmt.Errorf("loading LaunchAgent: %w", err)
 	}
 
@@ -140,7 +140,7 @@ func uninstallMenuAgent() error {
 		return nil
 	}
 
-	exec.Command("launchctl", "unload", plistPath).Run()
+	bootoutAgent(menuAgentLabel)
 	os.Remove(plistPath)
 
 	color.New(color.FgYellow).Println("Menu bar agent uninstalled.")

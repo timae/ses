@@ -261,8 +261,8 @@ func installDaemon() error {
 
 	plistPath := launchAgentPath()
 
-	// Unload existing if present
-	exec.Command("launchctl", "unload", plistPath).Run()
+	// Unload existing if present (tolerant — may not be loaded).
+	bootoutAgent(launchAgentLabel)
 
 	if err := os.MkdirAll(filepath.Dir(plistPath), 0755); err != nil {
 		return fmt.Errorf("creating LaunchAgents dir: %w", err)
@@ -272,7 +272,7 @@ func installDaemon() error {
 		return fmt.Errorf("writing plist: %w", err)
 	}
 
-	if err := exec.Command("launchctl", "load", plistPath).Run(); err != nil {
+	if err := bootstrapAgent(plistPath, launchAgentLabel); err != nil {
 		return fmt.Errorf("loading LaunchAgent: %w", err)
 	}
 
@@ -297,7 +297,7 @@ func uninstallDaemon() error {
 		return nil
 	}
 
-	exec.Command("launchctl", "unload", plistPath).Run()
+	bootoutAgent(launchAgentLabel)
 
 	if err := os.Remove(plistPath); err != nil {
 		return fmt.Errorf("removing plist: %w", err)
