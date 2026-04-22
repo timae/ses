@@ -6,12 +6,37 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/caseymrm/menuet"
 	"github.com/timae/rel.ai/internal/db"
 	"github.com/timae/rel.ai/internal/display"
 )
+
+// Search state is held at the package level because menuet rebuilds the menu
+// on demand by calling menuItems(). The click handler that triggers a search
+// runs on a different goroutine than the one rendering the menu, so the
+// mutex is necessary even though contention is effectively zero.
+var (
+	searchMu    sync.RWMutex
+	searchQuery string
+)
+
+const searchResultsLimit = 10
+
+func setSearchQuery(q string) {
+	searchMu.Lock()
+	searchQuery = q
+	searchMu.Unlock()
+	menuet.App().MenuChanged()
+}
+
+func getSearchQuery() string {
+	searchMu.RLock()
+	defer searchMu.RUnlock()
+	return searchQuery
+}
 
 func Run() {
 	go refreshLoop()
@@ -47,6 +72,44 @@ func menuItems() []menuet.MenuItem {
 	}
 
 	items = append(items, menuet.MenuItem{Type: menuet.Separator})
+
+	// Active search (if any) takes the top slot because it's the user's
+	// current focus; recent sessions fall below.
+	if q := getSearchQuery(); q != "" {
+		items = append(items, menuet.MenuItem{
+			Text:     fmt.Sprintf("Search: %s", display.Truncate(q, 30)),
+			FontSize: 10,
+		})
+		results, err := store.Search(q, searchResultsLimit)
+		if err != nil {
+			items = append(items, menuet.MenuItem{
+				Text: "  search error: " + err.Error(), FontSize: 11,
+			})
+		} else if len(results) == 0 {
+			items = append(items, menuet.MenuItem{Text: "  no matches", FontSize: 11})
+		} else {
+			for _, s := range results {
+				id := s.ShortID
+				if len(id) > 8 {
+					id = id[:8]
+				}
+				capturedID := id
+				prompt := display.Truncate(s.FirstPrompt, 35)
+				when := display.FormatTime(s.StartedAt)
+				items = append(items, menuet.MenuItem{
+					Text: fmt.Sprintf("%s  %s  %s", id, when, prompt),
+					Clicked: func() {
+						copyResumeCommand(capturedID)
+					},
+				})
+			}
+		}
+		items = append(items, menuet.MenuItem{
+			Text:    "Clear search",
+			Clicked: func() { setSearchQuery("") },
+		})
+		items = append(items, menuet.MenuItem{Type: menuet.Separator})
+	}
 
 	// Recent sessions
 	items = append(items, menuet.MenuItem{Text: "Recent Sessions", FontSize: 10})
@@ -87,6 +150,15 @@ func menuItems() []menuet.MenuItem {
 	items = append(items, menuet.MenuItem{Type: menuet.Separator})
 
 	// Actions
+	items = append(items, menuet.MenuItem{
+		Text:    "Search…",
+		Clicked: promptSearch,
+	})
+	items = append(items, menuet.MenuItem{
+		Text:    "Open picker in terminal…",
+		Clicked: openPickerInTerminal,
+	})
+	items = append(items, menuet.MenuItem{Type: menuet.Separator})
 	items = append(items, menuet.MenuItem{
 		Text: "Scan Now",
 		Clicked: func() {
@@ -134,6 +206,62 @@ func sesBin() string {
 		return p
 	}
 	return "ses"
+}
+
+// promptSearch pops a native NSAlert with a single text input. The user
+// types an FTS5 query and confirms; the query is stashed in package state
+// and the menu re-renders with matches inline.
+func promptSearch() {
+	pre := getSearchQuery()
+	clicked := menuet.App().Alert(menuet.Alert{
+		MessageText:     "Search sessions",
+		InformativeText: "FTS5 syntax supported. Results appear in the menu after you confirm.",
+		Buttons:         []string{"Search", "Cancel"},
+		Inputs:          []string{pre},
+	})
+	if clicked.Button != 0 { // Cancel or dismissed
+		return
+	}
+	var q string
+	if len(clicked.Inputs) > 0 {
+		q = strings.TrimSpace(clicked.Inputs[0])
+	}
+	setSearchQuery(q)
+}
+
+// openPickerInTerminal launches the bubble-tea picker in a new terminal
+// window. iTerm is preferred when installed; Terminal.app is the fallback.
+// osascript is the path that actually runs a command on open, not just
+// "open -a" which only launches the app.
+func openPickerInTerminal() {
+	bin := sesBin()
+	// Quote the binary path in case it contains spaces.
+	cmd := fmt.Sprintf(`%s resume`, shellQuote(bin))
+	if hasApp("iTerm") {
+		script := fmt.Sprintf(`tell application "iTerm"
+	activate
+	create window with default profile command %q
+end tell`, cmd)
+		exec.Command("osascript", "-e", script).Run()
+		return
+	}
+	script := fmt.Sprintf(`tell application "Terminal"
+	activate
+	do script %q
+end tell`, cmd)
+	exec.Command("osascript", "-e", script).Run()
+}
+
+func hasApp(name string) bool {
+	// `osascript -e 'id of application "Foo"'` exits 0 iff the app is installed.
+	err := exec.Command("osascript", "-e", fmt.Sprintf(`id of application %q`, name)).Run()
+	return err == nil
+}
+
+// shellQuote wraps s in single quotes, escaping any embedded single quotes.
+// Safer than hoping exec paths never contain spaces.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 func copyResumeCommand(shortID string) {

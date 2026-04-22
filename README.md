@@ -141,7 +141,11 @@ A companion menu bar app that puts a robot (🤖) in your status bar.
 - Daemon status (running/stopped)
 - Last 5 sessions — click to copy `ses resume <id> --inject` to clipboard
 - Quick stats (total sessions, this week)
+- **Search…** — opens a native prompt; on submit, the top 10 matches appear inline in the menu, each clickable to copy the resume command. A "Clear search" item shows while a query is active.
+- **Open picker in terminal…** — launches iTerm (or Terminal) running `ses resume`, dropping you into the bubble-tea fuzzy picker with live as-you-type search.
 - Scan Now / Restart Daemon actions
+
+Two different search UIs by design: the menu modal is for drive-by recall without leaving what you're doing; the terminal picker is for when you want to browse interactively.
 
 ```bash
 # Install both the daemon and menu bar app
