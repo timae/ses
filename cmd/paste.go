@@ -14,8 +14,10 @@ import (
 )
 
 var (
-	pasteTurn int
-	pasteGrep string
+	pasteTurn          int
+	pasteGrep          string
+	pasteIncludeOutput bool
+	pasteOnlyOutput    bool
 
 	pastesMinSize int
 	pastesShape   string
@@ -33,10 +35,16 @@ var pasteCmd = &cobra.Command{
 Useful for recovering a big JSON blob, log, or file body you fed Claude
 when the assistant can't recall it.
 
+Pass --include-output to also dump tool outputs (Bash stdout, Read, Grep
+results — the stuff Claude's UI collapses behind Ctrl+O). Use --only-output
+to skip user turns entirely.
+
 Examples:
-  ses paste a3f2                  # every user turn, separated by headers
-  ses paste a3f2 --turn 5         # just the 5th user turn
-  ses paste a3f2 --grep "ERROR"   # turns matching a regex
+  ses paste a3f2                    # every user turn, separated by headers
+  ses paste a3f2 --turn 5           # just the 5th user turn
+  ses paste a3f2 --grep "ERROR"     # turns matching a regex
+  ses paste a3f2 --include-output   # user turns + captured tool outputs
+  ses paste a3f2 --only-output      # just the tool outputs
   ses paste a3f2 --turn 5 | pbcopy`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -48,10 +56,6 @@ Examples:
 		if err != nil {
 			return fmt.Errorf("loading prompts: %w", err)
 		}
-		if len(prompts) == 0 {
-			fmt.Fprintln(os.Stderr, "no user prompts recorded for this session")
-			return nil
-		}
 
 		var grepRe *regexp.Regexp
 		if pasteGrep != "" {
@@ -62,6 +66,9 @@ Examples:
 		}
 
 		if pasteTurn > 0 {
+			if pasteOnlyOutput {
+				return fmt.Errorf("--turn can't be combined with --only-output")
+			}
 			if pasteTurn > len(prompts) {
 				return fmt.Errorf("--turn %d out of range (session has %d user turns)", pasteTurn, len(prompts))
 			}
@@ -73,20 +80,57 @@ Examples:
 		}
 
 		printed := 0
-		for i, p := range prompts {
-			if grepRe != nil && !grepRe.MatchString(p) {
-				continue
+		if !pasteOnlyOutput {
+			if len(prompts) == 0 {
+				fmt.Fprintln(os.Stderr, "no user prompts recorded for this session")
 			}
-			if printed > 0 {
-				fmt.Println()
+			for i, p := range prompts {
+				if grepRe != nil && !grepRe.MatchString(p) {
+					continue
+				}
+				if printed > 0 {
+					fmt.Println()
+				}
+				fmt.Fprintf(os.Stderr, "--- turn %d (%d chars) ---\n", i+1, len(p))
+				fmt.Print(p)
+				if !strings.HasSuffix(p, "\n") {
+					fmt.Println()
+				}
+				printed++
 			}
-			fmt.Fprintf(os.Stderr, "--- turn %d (%d chars) ---\n", i+1, len(p))
-			fmt.Print(p)
-			if !strings.HasSuffix(p, "\n") {
-				fmt.Println()
-			}
-			printed++
 		}
+
+		if pasteIncludeOutput || pasteOnlyOutput {
+			outputs, err := store.GetToolOutputs(session.ID)
+			if err != nil {
+				return fmt.Errorf("loading tool outputs: %w", err)
+			}
+			if len(outputs) == 0 {
+				fmt.Fprintln(os.Stderr, "no tool outputs captured for this session")
+			}
+			for _, o := range outputs {
+				if grepRe != nil && !grepRe.MatchString(o.Content) {
+					continue
+				}
+				if printed > 0 {
+					fmt.Println()
+				}
+				label := o.ToolName
+				if label == "" {
+					label = "tool"
+				}
+				if o.FilePath != "" {
+					label += " " + o.FilePath
+				}
+				fmt.Fprintf(os.Stderr, "--- %s output #%d (%s) ---\n", label, o.Ordinal+1, humanSize(o.Size))
+				fmt.Print(o.Content)
+				if !strings.HasSuffix(o.Content, "\n") {
+					fmt.Println()
+				}
+				printed++
+			}
+		}
+
 		if printed == 0 && grepRe != nil {
 			fmt.Fprintln(os.Stderr, "no turns matched --grep")
 		}
@@ -235,6 +279,8 @@ func relativeTime(t time.Time) string {
 func init() {
 	pasteCmd.Flags().IntVar(&pasteTurn, "turn", 0, "print only the Nth user turn (1-indexed)")
 	pasteCmd.Flags().StringVar(&pasteGrep, "grep", "", "print only turns matching this regex")
+	pasteCmd.Flags().BoolVar(&pasteIncludeOutput, "include-output", false, "also dump captured tool outputs (Bash/Read/Grep results)")
+	pasteCmd.Flags().BoolVar(&pasteOnlyOutput, "only-output", false, "dump only tool outputs, skip user turns")
 	rootCmd.AddCommand(pasteCmd)
 
 	pastesCmd.Flags().IntVar(&pastesMinSize, "min", 2000, "minimum paste size in characters")

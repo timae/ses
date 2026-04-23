@@ -64,9 +64,21 @@ CREATE TABLE IF NOT EXISTS session_links (
     PRIMARY KEY (from_id, to_id)
 );
 
+CREATE TABLE IF NOT EXISTS tool_outputs (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id INTEGER REFERENCES sessions(id) ON DELETE CASCADE,
+    ordinal    INTEGER NOT NULL,
+    tool_name  TEXT DEFAULT '',
+    file_path  TEXT DEFAULT '',
+    content    TEXT NOT NULL,
+    size       INTEGER NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_sessions_started ON sessions(started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project);
 CREATE INDEX IF NOT EXISTS idx_sessions_source  ON sessions(source_type);
 CREATE INDEX IF NOT EXISTS idx_session_links_from ON session_links(from_id);
 CREATE INDEX IF NOT EXISTS idx_session_links_to   ON session_links(to_id);
+CREATE INDEX IF NOT EXISTS idx_tool_outputs_session ON tool_outputs(session_id, ordinal);
+CREATE INDEX IF NOT EXISTS idx_tool_outputs_size    ON tool_outputs(size DESC);
 `

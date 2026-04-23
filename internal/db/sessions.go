@@ -35,7 +35,7 @@ func (db *DB) InsertSession(s *model.Session, messages []model.Message) error {
 	sessionID, _ := res.LastInsertId()
 
 	// Delete old related data (for OR REPLACE case)
-	for _, table := range []string{"user_prompts", "session_files", "session_tags"} {
+	for _, table := range []string{"user_prompts", "session_files", "session_tags", "tool_outputs"} {
 		tx.Exec("DELETE FROM "+table+" WHERE session_id = ?", sessionID)
 	}
 
@@ -45,6 +45,18 @@ func (db *DB) InsertSession(s *model.Session, messages []model.Message) error {
 		tx.Exec(`INSERT INTO user_prompts (session_id, ordinal, content) VALUES (?, ?, ?)`,
 			sessionID, i, p)
 		promptTexts = append(promptTexts, p)
+	}
+
+	// Insert tool outputs (tool_result messages) — opt-in surface for
+	// recovering what Claude saw from Bash/Read/Grep etc.
+	toolOrdinal := 0
+	for _, m := range messages {
+		if m.Role != "tool_result" || m.Content == "" {
+			continue
+		}
+		tx.Exec(`INSERT INTO tool_outputs (session_id, ordinal, tool_name, file_path, content, size) VALUES (?, ?, ?, ?, ?, ?)`,
+			sessionID, toolOrdinal, m.ToolName, m.FilePath, m.Content, len(m.Content))
+		toolOrdinal++
 	}
 
 	// Insert files

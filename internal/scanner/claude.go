@@ -62,11 +62,20 @@ type claudeMessage struct {
 }
 
 type claudeContentBlock struct {
-	Type  string          `json:"type"` // "text", "tool_use", "tool_result", "thinking"
-	Text  string          `json:"text"`
-	Name  string          `json:"name"`
-	Input json.RawMessage `json:"input"`
+	Type      string          `json:"type"` // "text", "tool_use", "tool_result", "thinking"
+	Text      string          `json:"text"`
+	Name      string          `json:"name"`
+	Input     json.RawMessage `json:"input"`
+	ID        string          `json:"id"`           // present on tool_use
+	ToolUseID string          `json:"tool_use_id"`  // present on tool_result, pairs with tool_use.ID
+	Content   json.RawMessage `json:"content"`      // tool_result body: string or [{type,text}]
+	IsError   bool            `json:"is_error"`
 }
+
+// maxToolOutputBytes caps what we store per tool_result in the DB. Raw
+// transcripts on disk still have the full content; this cap just keeps the
+// index lean — ses is for eyeball retrieval, not a full replay store.
+const maxToolOutputBytes = 256 * 1024
 
 func (s *ClaudeScanner) Discover() ([]SessionFile, error) {
 	// Build session metadata map from sessions/*.json
@@ -167,6 +176,7 @@ func (s *ClaudeScanner) Parse(sf SessionFile) (*model.Session, []model.Message, 
 
 	var messages []model.Message
 	filesMap := make(map[string]string) // path -> action
+	toolUses := make(map[string]toolCallInfo) // tool_use.id -> info, for pairing with tool_result
 
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 2*1024*1024), 2*1024*1024)
@@ -179,8 +189,9 @@ func (s *ClaudeScanner) Parse(sf SessionFile) (*model.Session, []model.Message, 
 
 		switch line.Type {
 		case "user":
-			// Extract user text content
-			text := extractClaudeText(line.Message.Content)
+			// Extract user text + any tool_result blocks. The API encodes tool
+			// outputs as user-role messages with tool_result content blocks.
+			text, results := extractClaudeUserContent(line.Message.Content, toolUses)
 			if text != "" {
 				session.UserPrompts = append(session.UserPrompts, text)
 				session.MessageCount++
@@ -191,6 +202,14 @@ func (s *ClaudeScanner) Parse(sf SessionFile) (*model.Session, []model.Message, 
 				if session.FirstPrompt == "" {
 					session.FirstPrompt = text
 				}
+			}
+			for _, r := range results {
+				messages = append(messages, model.Message{
+					Role:     "tool_result",
+					Content:  r.Content,
+					ToolName: r.Name,
+					FilePath: r.FilePath,
+				})
 			}
 
 			// Capture metadata from first user message
@@ -234,6 +253,9 @@ func (s *ClaudeScanner) Parse(sf SessionFile) (*model.Session, []model.Message, 
 					ToolName: tc.Name,
 					FilePath: tc.FilePath,
 				})
+				if tc.ID != "" {
+					toolUses[tc.ID] = tc
+				}
 				if tc.FilePath != "" {
 					action := "read"
 					switch tc.Name {
@@ -264,26 +286,15 @@ func (s *ClaudeScanner) Parse(sf SessionFile) (*model.Session, []model.Message, 
 }
 
 type toolCallInfo struct {
+	ID       string
 	Name     string
 	FilePath string
 }
 
-func extractClaudeText(raw json.RawMessage) string {
-	// Content can be a string or array of content blocks
-	var str string
-	if json.Unmarshal(raw, &str) == nil {
-		return str
-	}
-
-	var blocks []claudeContentBlock
-	if json.Unmarshal(raw, &blocks) == nil {
-		for _, b := range blocks {
-			if b.Type == "text" && b.Text != "" {
-				return b.Text
-			}
-		}
-	}
-	return ""
+type toolResultInfo struct {
+	Name     string
+	FilePath string
+	Content  string
 }
 
 func extractClaudeAssistantContent(raw json.RawMessage) (text string, tools []toolCallInfo) {
@@ -299,7 +310,7 @@ func extractClaudeAssistantContent(raw json.RawMessage) (text string, tools []to
 				text = b.Text
 			}
 		case "tool_use":
-			tc := toolCallInfo{Name: b.Name}
+			tc := toolCallInfo{ID: b.ID, Name: b.Name}
 			// Try to extract file_path from input
 			var input map[string]any
 			if json.Unmarshal(b.Input, &input) == nil {
@@ -311,6 +322,75 @@ func extractClaudeAssistantContent(raw json.RawMessage) (text string, tools []to
 		}
 	}
 	return text, tools
+}
+
+// extractClaudeUserContent pulls the user's typed text out of a user-role
+// message and also returns any tool_result blocks in it. Tool results are
+// paired back to the originating tool_use via tool_use_id so we carry the
+// tool name and file path forward.
+func extractClaudeUserContent(raw json.RawMessage, toolUses map[string]toolCallInfo) (text string, results []toolResultInfo) {
+	// A user message can be a bare string (typed prompt) or an array of
+	// content blocks (tool results live in the array form).
+	var str string
+	if json.Unmarshal(raw, &str) == nil {
+		return str, nil
+	}
+
+	var blocks []claudeContentBlock
+	if json.Unmarshal(raw, &blocks) != nil {
+		return "", nil
+	}
+
+	for _, b := range blocks {
+		switch b.Type {
+		case "text":
+			if b.Text != "" && text == "" {
+				text = b.Text
+			}
+		case "tool_result":
+			body := flattenToolResultContent(b.Content)
+			if body == "" {
+				continue
+			}
+			if len(body) > maxToolOutputBytes {
+				body = body[:maxToolOutputBytes] + "\n…[truncated by ses]"
+			}
+			r := toolResultInfo{Content: body}
+			if info, ok := toolUses[b.ToolUseID]; ok {
+				r.Name = info.Name
+				r.FilePath = info.FilePath
+			}
+			results = append(results, r)
+		}
+	}
+	return text, results
+}
+
+// flattenToolResultContent handles the two shapes the API uses for a
+// tool_result's `content` field: a plain string, or an array of
+// {type:"text", text:"..."} blocks.
+func flattenToolResultContent(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var str string
+	if json.Unmarshal(raw, &str) == nil {
+		return str
+	}
+	var blocks []claudeContentBlock
+	if json.Unmarshal(raw, &blocks) != nil {
+		return ""
+	}
+	var sb strings.Builder
+	for _, b := range blocks {
+		if b.Type == "text" && b.Text != "" {
+			if sb.Len() > 0 {
+				sb.WriteByte('\n')
+			}
+			sb.WriteString(b.Text)
+		}
+	}
+	return sb.String()
 }
 
 func decodeProjectPath(dirName string) string {
